@@ -1,11 +1,141 @@
 "use server";
 
+import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/session";
 
 const MOD_ROLES = new Set(["MODERATOR", "ADMIN", "OWNER"]);
+
+function slugify(name: string) {
+  const base = name
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return base || "community";
+}
+
+/** Appends -2, -3, … until it finds a slug nothing else is using — same
+ * pattern as uniqueSlug in actions/team.ts and uniqueClipSlug in
+ * actions/clip.ts. */
+async function uniqueCommunitySlug(base: string) {
+  let slug = base;
+  for (let suffix = 2; await prisma.community.findUnique({ where: { slug }, select: { id: true } }); suffix++) {
+    slug = `${base}-${suffix}`;
+  }
+  return slug;
+}
+
+const createCommunitySchema = z.object({
+  name: z.string().trim().min(3, "Use at least 3 characters").max(40, "Keep it under 40 characters"),
+  tagline: z.string().trim().min(3, "Use at least 3 characters").max(80, "Keep it under 80 characters"),
+  description: z
+    .string()
+    .trim()
+    .min(10, "Say a bit more about the community")
+    .max(500, "Keep it under 500 characters"),
+  // A game slug, or "" for no specific game — Community.gameId is
+  // optional in the schema, same as it is on Profile.
+  game: z.string().trim(),
+  visibility: z.enum(["public", "private"]),
+});
+
+type CreateCommunityField = "name" | "tagline" | "description" | "game" | "visibility";
+
+export type CreateCommunityFormState =
+  | { error?: string; fieldErrors?: Partial<Record<CreateCommunityField, string>> }
+  | undefined;
+
+/**
+ * The three default channels every new community starts with, so it isn't
+ * empty the moment its owner lands on it. Deliberately a smaller set than
+ * the seeded demo communities' six (which also have looking-for-team,
+ * ranked and tournament-talk) — those assume an established, game-focused
+ * community with real traffic, and there's no in-app way yet to rename or
+ * remove a channel (see actions/community.ts's other exports — channel
+ * management isn't built), so seeding niche channels a brand-new owner is
+ * stuck with would be worse than a small, generally-useful default:
+ *   - announcements: read-only-by-convention (see the ANNOUNCEMENT-kind
+ *     check in createCommunityPostAction below) space for the owner to
+ *     post updates from day one.
+ *   - general: the obvious catch-all.
+ *   - clips: ties into the site's clip-sharing identity regardless of
+ *     which game (or no game) the community is about.
+ */
+const DEFAULT_CHANNELS = [
+  { name: "announcements", kind: "ANNOUNCEMENT" as const, position: 0, topic: "Read-only. Events and rule changes." },
+  { name: "general", kind: "TEXT" as const, position: 1, topic: "Anything goes, keep it civil." },
+  { name: "clips", kind: "CLIPS" as const, position: 2 },
+];
+
+/**
+ * Creates a community with its creator as OWNER and memberCount starting
+ * at 1 — Community, its default channels, and the owner's CommunityMember
+ * row all go in as one nested-write create, the same "no window where the
+ * owner-less/channel-less thing exists" reasoning as createTeamAction in
+ * actions/team.ts.
+ */
+export async function createCommunityAction(
+  _state: CreateCommunityFormState,
+  formData: FormData,
+): Promise<CreateCommunityFormState> {
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+
+  const parsed = createCommunitySchema.safeParse({
+    name: formData.get("name"),
+    tagline: formData.get("tagline"),
+    description: formData.get("description"),
+    game: formData.get("game") ?? "",
+    visibility: formData.get("visibility"),
+  });
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const field = issue?.path[0];
+    if (typeof field === "string") {
+      return { fieldErrors: { [field as CreateCommunityField]: issue.message } };
+    }
+    return { error: "Check the form and try again." };
+  }
+  const { name, tagline, description, game, visibility } = parsed.data;
+
+  // Name isn't DB-unique-constrained (only slug is) — same reasoning as
+  // createTeamAction: check it explicitly so a collision surfaces as a
+  // clear field error instead of silently minting a second, confusingly
+  // similarly-named community.
+  const existing = await prisma.community.findFirst({
+    where: { name: { equals: name, mode: "insensitive" } },
+    select: { id: true },
+  });
+  if (existing) return { fieldErrors: { name: "That community name is taken." } };
+
+  let gameId: string | null = null;
+  if (game) {
+    const gameRow = await prisma.game.findUnique({ where: { slug: game }, select: { id: true } });
+    if (!gameRow) return { fieldErrors: { game: "Pick a valid game." } };
+    gameId = gameRow.id;
+  }
+
+  const slug = await uniqueCommunitySlug(slugify(name));
+
+  const community = await prisma.community.create({
+    data: {
+      slug,
+      name,
+      tagline,
+      description,
+      gameId,
+      isPublic: visibility === "public",
+      memberCount: 1,
+      channels: { create: DEFAULT_CHANNELS },
+      members: { create: { userId: user.id, role: "OWNER" } },
+    },
+  });
+
+  redirect(`/communities/${community.slug}`);
+}
 
 const input = z.object({ communityId: z.string().min(1) });
 
