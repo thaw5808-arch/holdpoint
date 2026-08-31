@@ -1,0 +1,411 @@
+@import "tailwindcss";
+
+/* ------------------------------------------------------------------
+   HOLDPOINT design tokens
+   Base is a deep bottle-green ink rather than neutral black, so the
+   chartreuse signal reads as light on the surface instead of neon on
+   void. Chartreuse is structural (state, focus, active). Red is
+   reserved exclusively for LIVE — nothing else in the product may use
+   it. Gold appears only on tournament objects.
+   ------------------------------------------------------------------ */
+
+@theme {
+  --color-ink: #0a0f0d;
+  /* Named "canvas", not "base" — Tailwind v4 auto-generates a `text-base`
+     *color* utility from any --color-base token, which collides with (and
+     wins over) its own built-in `text-base` font-size utility. That
+     silently painted title text the same as the page background
+     wherever `text-base` was used for sizing (EmptyState's title among
+     them) — never rename this back to "base" without checking that. */
+  --color-canvas: #0d1310;
+  --color-surface: #131a16;
+  --color-raised: #19221d;
+  --color-line: #253029;
+  --color-line-strong: #35443b;
+
+  --color-text: #e8f0ea;
+  --color-muted: #93a399;
+  --color-faint: #64756b;
+
+  --color-signal: #cbff4d;
+  --color-signal-dim: #9dc736;
+  --color-live: #ff4438;
+  --color-gold: #f0c25a;
+  --color-ice: #86d6e8;
+
+  --font-display: var(--font-chakra), "Chakra Petch", system-ui, sans-serif;
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jet), ui-monospace, monospace;
+
+  --radius-none: 0px;
+
+  --ease-out-hp: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+:root {
+  color-scheme: dark;
+  --dur: 200ms;
+
+  /* Shared with (app)/layout.tsx and clip-feed.tsx so the two never drift
+     out of sync: the app shell's sticky Topbar height, and the clearance
+     `main` reserves below `lg` for the fixed MobileNav bar. */
+  --header-h: 56px;
+  --mobile-nav-clearance: 76px;
+}
+
+* {
+  border-color: var(--color-line);
+}
+
+html,
+body {
+  background: var(--color-canvas);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  /* faint diagonal weave so large dark areas are never dead flat */
+  background-image: repeating-linear-gradient(
+    115deg,
+    rgba(255, 255, 255, 0.014) 0px,
+    rgba(255, 255, 255, 0.014) 1px,
+    transparent 1px,
+    transparent 7px
+  );
+}
+
+::selection {
+  background: var(--color-signal);
+  color: var(--color-ink);
+}
+
+/* ---------------------------------------------------------- typography */
+
+.display {
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--color-faint);
+}
+
+.tabular {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------------------------------------------------- signature
+   The corner tick. Four L-brackets that pull inward on hover, borrowed
+   from capture-point HUD framing. This is the one motif that repeats
+   across every interactive surface in the product.                    */
+
+.tick {
+  position: relative;
+}
+
+.tick::before,
+.tick::after {
+  content: "";
+  position: absolute;
+  width: 11px;
+  height: 11px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--dur) var(--ease-out-hp),
+    inset var(--dur) var(--ease-out-hp);
+  border-color: var(--color-signal);
+}
+
+.tick::before {
+  top: -1px;
+  left: -1px;
+  border-top: 1.5px solid;
+  border-left: 1.5px solid;
+}
+
+.tick::after {
+  right: -1px;
+  bottom: -1px;
+  border-right: 1.5px solid;
+  border-bottom: 1.5px solid;
+}
+
+.tick:hover::before,
+.tick:hover::after,
+.tick:focus-within::before,
+.tick:focus-within::after {
+  opacity: 1;
+  inset: auto;
+}
+
+.tick:hover::before,
+.tick:focus-within::before {
+  top: 4px;
+  left: 4px;
+}
+
+.tick:hover::after,
+.tick:focus-within::after {
+  right: 4px;
+  bottom: 4px;
+}
+
+/* Pairs with .tick — keeps its corner brackets permanently engaged
+   (not just on hover/focus) for whichever card is currently selected, so
+   the same "framed" cue a hover gives also marks the picked state at
+   rest. Add alongside .tick, e.g. `tick tick-active`. */
+.tick-active::before,
+.tick-active::after {
+  opacity: 1;
+  inset: auto;
+}
+
+.tick-active::before {
+  top: 4px;
+  left: 4px;
+}
+
+.tick-active::after {
+  right: 4px;
+  bottom: 4px;
+}
+
+/* ---------------------------------------------------------- selection
+   Shared "this is picked" outline for multi-select cards/rows (the
+   onboarding game grid and goals list; anywhere else that needs the same
+   treatment should reuse this rather than reaching for Tailwind's
+   border-{color} utilities). Deliberately plain, unlayered CSS: the
+   `* { border-color: var(--color-line); }` reset near the top of this
+   file is itself unlayered, so it silently wins over ANY `border-*`
+   Tailwind utility regardless of source order or specificity — a
+   `border-signal` class here would compile fine and simply never
+   render, the same reason .btn/.input above stay unlayered too. */
+.card-select {
+  border: 1px solid var(--color-line);
+  background: var(--color-surface);
+  transition: border-color var(--dur) var(--ease-out-hp),
+    box-shadow var(--dur) var(--ease-out-hp), background var(--dur);
+}
+
+.card-select:hover {
+  border-color: var(--color-line-strong);
+}
+
+.card-select-active,
+.card-select-active:hover {
+  border-color: var(--color-signal);
+  /* A ring rather than a thicker border — reads unmistakably as "picked"
+     without shifting layout by changing border-width. */
+  box-shadow: 0 0 0 1px var(--color-signal);
+  background: color-mix(in srgb, var(--color-signal) 8%, transparent);
+}
+
+/* Chamfered corner — cut, never rounded. Applied to badges and emblems. */
+.chamfer {
+  clip-path: polygon(9px 0, 100% 0, 100% calc(100% - 9px), calc(100% - 9px) 100%, 0 100%, 0 9px);
+}
+
+.chamfer-sm {
+  clip-path: polygon(5px 0, 100% 0, 100% calc(100% - 5px), calc(100% - 5px) 100%, 0 100%, 0 5px);
+}
+
+/* Hazard band — only ever wraps live or in-progress competition. */
+.hazard {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    var(--color-live) 0px,
+    var(--color-live) 6px,
+    transparent 6px,
+    transparent 12px
+  );
+}
+
+/* ---------------------------------------------------------- glass
+   Used only on floating layers: overlays, menus, sheets, player
+   controls. Content surfaces stay opaque for readability.            */
+
+.glass {
+  background: color-mix(in srgb, var(--color-ink) 72%, transparent);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  border: 1px solid color-mix(in srgb, white 9%, transparent);
+  box-shadow: 0 18px 48px -24px rgba(0, 0, 0, 0.9),
+    inset 0 1px 0 color-mix(in srgb, white 6%, transparent);
+}
+
+.glass-strong {
+  background: color-mix(in srgb, var(--color-ink) 88%, transparent);
+  backdrop-filter: blur(26px) saturate(150%);
+  -webkit-backdrop-filter: blur(26px) saturate(150%);
+  border: 1px solid color-mix(in srgb, white 10%, transparent);
+  box-shadow: 0 26px 70px -30px rgba(0, 0, 0, 0.95);
+}
+
+/* ---------------------------------------------------------- controls */
+
+.focus-ring:focus-visible,
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--color-signal);
+  outline-offset: 2px;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.8125rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.5rem 0.9rem;
+  border: 1px solid var(--color-line-strong);
+  color: var(--color-text);
+  background: var(--color-raised);
+  transition: transform 120ms var(--ease-out-hp), background var(--dur),
+    border-color var(--dur);
+}
+
+.btn:hover {
+  background: color-mix(in srgb, var(--color-raised) 70%, var(--color-line));
+  border-color: var(--color-line-strong);
+}
+
+.btn:active {
+  transform: translateY(1px);
+}
+
+.btn-primary {
+  background: var(--color-signal);
+  border-color: var(--color-signal);
+  color: var(--color-ink);
+}
+
+.btn-primary:hover {
+  background: color-mix(in srgb, var(--color-signal) 88%, white);
+}
+
+.btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--color-muted);
+}
+
+.btn-ghost:hover {
+  color: var(--color-text);
+  background: var(--color-surface);
+}
+
+.input {
+  width: 100%;
+  background: var(--color-ink);
+  border: 1px solid var(--color-line);
+  padding: 0.6rem 0.75rem;
+  font-size: 0.9rem;
+  color: var(--color-text);
+  transition: border-color var(--dur);
+}
+
+.input::placeholder {
+  color: var(--color-faint);
+}
+
+.input:hover {
+  border-color: var(--color-line-strong);
+}
+
+/* For an input with a leading icon absolutely positioned inside it (e.g.
+   the topbar search field). `.input` sits outside any @layer, so it beats
+   a Tailwind utility like `pl-9` in the cascade regardless of source order
+   — same reason .btn can't be recoloured with Tailwind utilities. This
+   stays unlayered too, so it actually wins. */
+.input-icon-left {
+  padding-left: 2.25rem;
+}
+
+/* ---------------------------------------------------------- skeletons */
+
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--color-surface);
+}
+
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, white 4%, transparent),
+    transparent
+  );
+  animation: sweep 1.4s infinite;
+}
+
+@keyframes sweep {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes pulse-live {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.live-dot {
+  animation: pulse-live 1.8s ease-in-out infinite;
+}
+
+.scroll-x {
+  overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line-strong) transparent;
+}
+
+.scroll-x::-webkit-scrollbar {
+  height: 6px;
+}
+
+.scroll-x::-webkit-scrollbar-thumb {
+  background: var(--color-line-strong);
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  scrollbar-width: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

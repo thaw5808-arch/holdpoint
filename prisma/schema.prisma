@@ -1,0 +1,1093 @@
+// HOLDPOINT — relational model
+// Prisma 6 style: datasource url stays in this file. If you upgrade to Prisma 7,
+// move `url` into prisma.config.ts (see README).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------- identity
+
+enum UserRole {
+  VIEWER
+  CREATOR
+  ORGANIZER
+  MODERATOR
+  ADMIN
+}
+
+enum PresenceStatus {
+  ONLINE
+  IN_GAME
+  STREAMING
+  AWAY
+  OFFLINE
+}
+
+enum AccountStatus {
+  ACTIVE
+  SUSPENDED
+  BANNED
+  DELETED
+}
+
+model User {
+  id            String         @id @default(cuid())
+  email         String         @unique
+  username      String         @unique
+  displayName   String
+  passwordHash  String? // null for Google-only accounts (see googleId)
+  googleId      String?        @unique // Google's `sub` claim, once linked
+  role          UserRole       @default(VIEWER)
+  status        AccountStatus  @default(ACTIVE)
+  emailVerified DateTime?
+  presence      PresenceStatus @default(OFFLINE)
+  lastSeenAt    DateTime       @default(now())
+  onboardedAt   DateTime?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  profile             Profile?
+  preference          PlayerPreference?
+  sessions            Session[]
+  ranks               GameRank[]
+  channel             Stream?
+  following           Follow[]             @relation("follower")
+  followers           Follow[]             @relation("followed")
+  friendsSent         Friendship[]         @relation("friendRequester")
+  friendsGot          Friendship[]         @relation("friendAddressee")
+  chatMessages        ChatMessage[]
+  subsAsViewer        Subscription[]       @relation("subscriber")
+  subsAsCreator       Subscription[]       @relation("subscribedTo")
+  communities         CommunityMember[]
+  ownedTeams          Team[]               @relation("teamOwner")
+  teams               TeamMember[]
+  teamInvitesReceived TeamInvite[]         @relation("teamInviteRecipient")
+  teamInvitesSent     TeamInvite[]         @relation("teamInviteSender")
+  clips               Clip[]
+  vods                VOD[]
+  comments            Comment[]
+  reactions           Reaction[]
+  achievements        UserAchievement[]
+  notifications       Notification[]
+  convos              ConversationMember[]
+  messages            Message[]
+  lfgPosts            LFGPost[]
+  points              CommunityPoint[]
+  reportsMade         Report[]             @relation("reporter")
+  reportsGot          Report[]             @relation("reported")
+  reportsResolved     Report[]             @relation("reportResolver")
+  bans                Ban[]                @relation("bannedUser")
+  bansIssued          Ban[]                @relation("bannedBy")
+  predictions         PredictionEntry[]
+  voiceSeats          VoiceParticipant[]
+  organized           Tournament[]         @relation("tournamentOrganizer")
+  adminActionsGot     AdminAction[]        @relation("adminActionTarget")
+  adminActionsDone    AdminAction[]        @relation("adminActionActor")
+
+  @@index([presence])
+}
+
+model Session {
+  id        String     @id @default(cuid())
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime   @default(now())
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clipViews ClipView[]
+
+  @@index([userId])
+}
+
+model Profile {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  bio           String?
+  avatarUrl     String?
+  bannerUrl     String?
+  accentColor   String? // hex, drives the profile's rank-frame tint
+  country       String?
+  region        String? // SEA / NA / EU / …
+  languages     String[]
+  currentGameId String?
+  level         Int      @default(1)
+  xp            Int      @default(0)
+  verified      Boolean  @default(false)
+  partner       Boolean  @default(false)
+
+  user        User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  currentGame Game? @relation(fields: [currentGameId], references: [id])
+}
+
+model PlayerPreference {
+  id             String   @id @default(cuid())
+  userId         String   @unique
+  region         String
+  languages      String[]
+  platforms      String[] // PC / PS5 / XBOX / MOBILE / SWITCH
+  competitive    Int      @default(50) // 0 = pure casual, 100 = pure competitive
+  micRequired    Boolean  @default(true)
+  activeHours    Int[] // hours 0–23 the player is usually online, local to `region`
+  goals          String[] // WATCH / TEAMMATES / STREAM / TOURNAMENTS / COMMUNITY
+  preferredRoles String[]
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ---------------------------------------------------------------- games
+
+model Game {
+  id        String   @id @default(cuid())
+  slug      String   @unique
+  name      String
+  shortName String
+  genre     String
+  coverUrl  String?
+  artUrl    String?
+  rankTiers String[] // ordered, lowest → highest
+  roles     String[]
+  teamSize  Int      @default(5)
+  createdAt DateTime @default(now())
+
+  ranks       GameRank[]
+  streams     Stream[]
+  sessions    StreamSession[]
+  clips       Clip[]
+  vods        VOD[]
+  tournaments Tournament[]
+  lfgPosts    LFGPost[]
+  communities Community[]
+  teams       TeamGame[]
+  profiles    Profile[]
+}
+
+model GameRank {
+  id       String  @id @default(cuid())
+  userId   String
+  gameId   String
+  tier     String
+  tierIdx  Int // index into Game.rankTiers — makes skill comparison a cheap integer diff
+  role     String?
+  hours    Int     @default(0)
+  verified Boolean @default(false)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  game Game @relation(fields: [gameId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, gameId])
+  @@index([gameId, tierIdx])
+}
+
+// ---------------------------------------------------------------- graph
+
+model Follow {
+  id         String   @id @default(cuid())
+  followerId String
+  followedId String
+  createdAt  DateTime @default(now())
+  notify     Boolean  @default(true)
+
+  follower User @relation("follower", fields: [followerId], references: [id], onDelete: Cascade)
+  followed User @relation("followed", fields: [followedId], references: [id], onDelete: Cascade)
+
+  @@unique([followerId, followedId])
+  @@index([followedId])
+}
+
+enum FriendshipStatus {
+  PENDING
+  ACCEPTED
+  BLOCKED
+}
+
+model Friendship {
+  id          String           @id @default(cuid())
+  requesterId String
+  addresseeId String
+  status      FriendshipStatus @default(PENDING)
+  createdAt   DateTime         @default(now())
+
+  requester User @relation("friendRequester", fields: [requesterId], references: [id], onDelete: Cascade)
+  addressee User @relation("friendAddressee", fields: [addresseeId], references: [id], onDelete: Cascade)
+
+  @@unique([requesterId, addresseeId])
+}
+
+// ---------------------------------------------------------------- streaming
+
+model Stream {
+  id            String    @id @default(cuid())
+  userId        String    @unique
+  slug          String    @unique // channel handle in the URL
+  title         String
+  gameId        String?
+  tags          String[]
+  language      String    @default("en")
+  isLive        Boolean   @default(false)
+  viewerCount   Int       @default(0)
+  peakViewers   Int       @default(0)
+  startedAt     DateTime?
+  thumbnailUrl  String?
+  streamKey     String    @unique // rotate on demand; never rendered client-side
+  ingestUrl     String    @default("rtmps://ingest.holdpoint.gg/live")
+  latencyMode   String    @default("LOW") // LOW | NORMAL
+  chatSlowMode  Int       @default(0) // seconds between messages, 0 = off
+  followersOnly Boolean   @default(false)
+  subsOnly      Boolean   @default(false)
+
+  user     User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  game     Game?           @relation(fields: [gameId], references: [id])
+  sessions StreamSession[]
+  messages ChatMessage[]
+  clips    Clip[]
+  vods     VOD[]
+  polls    Poll[]
+
+  @@index([isLive, viewerCount])
+}
+
+model StreamSession {
+  id              String    @id @default(cuid())
+  streamId        String
+  gameId          String?
+  title           String
+  startedAt       DateTime  @default(now())
+  endedAt         DateTime?
+  peakViewers     Int       @default(0)
+  avgViewers      Int       @default(0)
+  minutesWatched  Int       @default(0)
+  followersGained Int       @default(0)
+
+  stream Stream @relation(fields: [streamId], references: [id], onDelete: Cascade)
+  game   Game?  @relation(fields: [gameId], references: [id])
+  vod    VOD?
+
+  @@index([streamId, startedAt])
+}
+
+enum SubTier {
+  TIER_1
+  TIER_2
+  TIER_3
+}
+
+model Subscription {
+  id         String   @id @default(cuid())
+  creatorId  String
+  viewerId   String
+  tier       SubTier  @default(TIER_1)
+  gifted     Boolean  @default(false)
+  giftedById String?
+  startedAt  DateTime @default(now())
+  renewsAt   DateTime
+  cancelled  Boolean  @default(false)
+
+  creator User @relation("subscribedTo", fields: [creatorId], references: [id], onDelete: Cascade)
+  viewer  User @relation("subscriber", fields: [viewerId], references: [id], onDelete: Cascade)
+
+  @@unique([creatorId, viewerId])
+  @@index([creatorId])
+}
+
+model ChatMessage {
+  id        String   @id @default(cuid())
+  streamId  String
+  userId    String
+  body      String
+  replyToId String?
+  pinned    Boolean  @default(false)
+  deleted   Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  stream  Stream        @relation(fields: [streamId], references: [id], onDelete: Cascade)
+  user    User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  replyTo ChatMessage?  @relation("chatReply", fields: [replyToId], references: [id], onDelete: SetNull)
+  replies ChatMessage[] @relation("chatReply")
+
+  @@index([streamId, createdAt])
+}
+
+// ------------------------------------------------ interactive streaming
+
+enum PollKind {
+  POLL
+  PREDICTION
+  CHALLENGE
+  GOAL
+}
+
+model Poll {
+  id        String   @id @default(cuid())
+  streamId  String
+  kind      PollKind @default(POLL)
+  question  String
+  closesAt  DateTime
+  resolved  Boolean  @default(false)
+  winnerId  String?
+  createdAt DateTime @default(now())
+
+  stream  Stream       @relation(fields: [streamId], references: [id], onDelete: Cascade)
+  options PollOption[]
+
+  @@index([streamId, resolved])
+}
+
+model PollOption {
+  id     String @id @default(cuid())
+  pollId String
+  label  String
+  votes  Int    @default(0)
+  points Int    @default(0)
+
+  poll    Poll              @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  entries PredictionEntry[]
+}
+
+model PredictionEntry {
+  id        String   @id @default(cuid())
+  optionId  String
+  userId    String
+  points    Int
+  createdAt DateTime @default(now())
+
+  option PollOption @relation(fields: [optionId], references: [id], onDelete: Cascade)
+  user   User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([optionId, userId])
+}
+
+model CommunityPoint {
+  id        String @id @default(cuid())
+  userId    String
+  creatorId String
+  balance   Int    @default(0)
+  earned    Int    @default(0)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, creatorId])
+}
+
+// ---------------------------------------------------------------- video
+
+model VOD {
+  id           String   @id @default(cuid())
+  streamId     String
+  sessionId    String?  @unique
+  userId       String
+  gameId       String?
+  title        String
+  durationSec  Int
+  views        Int      @default(0)
+  thumbnailUrl String?
+  playbackUrl  String?
+  createdAt    DateTime @default(now())
+
+  stream  Stream         @relation(fields: [streamId], references: [id], onDelete: Cascade)
+  session StreamSession? @relation(fields: [sessionId], references: [id])
+  user    User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  game    Game?          @relation(fields: [gameId], references: [id])
+  clips   Clip[]
+
+  @@index([userId, createdAt])
+}
+
+enum ClipSource {
+  MANUAL
+  AUTO_CHAT_SPIKE
+  AUTO_GAME_EVENT
+  AUTO_VIEWER_SPIKE
+  AUTO_MARKER
+}
+
+model Clip {
+  id           String     @id @default(cuid())
+  slug         String     @unique
+  userId       String
+  streamId     String?
+  vodId        String?
+  gameId       String?
+  title        String
+  caption      String?
+  durationSec  Int
+  aspect       String     @default("9:16")
+  source       ClipSource @default(MANUAL)
+  heatScore    Int        @default(0) // why the auto-detector flagged this moment
+  views        Int        @default(0)
+  likes        Int        @default(0)
+  saves        Int        @default(0)
+  thumbnailUrl String?
+  playbackUrl  String?
+  published    Boolean    @default(true)
+  createdAt    DateTime   @default(now())
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  stream    Stream?    @relation(fields: [streamId], references: [id], onDelete: SetNull)
+  vod       VOD?       @relation(fields: [vodId], references: [id], onDelete: SetNull)
+  game      Game?      @relation(fields: [gameId], references: [id])
+  comments  Comment[]
+  reactions Reaction[]
+  viewLog   ClipView[]
+
+  @@index([published, createdAt])
+  @@index([gameId, views])
+}
+
+// One row per (clip, session) that actually watched a couple of seconds of
+// it — a dedup ledger for Clip.views, not a source of truth for the count
+// itself (that stays the cheap denormalised counter on Clip, bumped
+// alongside this in the same transaction). Scoped to the session rather
+// than the user: a session getting deleted (logout, expiry) is exactly
+// when it's fine for the same person to be counted again later. Cascades
+// with both sides — a deleted clip or session takes its view rows with it.
+model ClipView {
+  id        String   @id @default(cuid())
+  clipId    String
+  sessionId String
+  createdAt DateTime @default(now())
+
+  clip    Clip    @relation(fields: [clipId], references: [id], onDelete: Cascade)
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([clipId, sessionId])
+}
+
+model Comment {
+  id        String   @id @default(cuid())
+  clipId    String
+  userId    String
+  body      String
+  parentId  String?
+  createdAt DateTime @default(now())
+
+  clip    Clip      @relation(fields: [clipId], references: [id], onDelete: Cascade)
+  user    User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  parent  Comment?  @relation("commentThread", fields: [parentId], references: [id], onDelete: Cascade)
+  replies Comment[] @relation("commentThread")
+
+  @@index([clipId, createdAt])
+}
+
+model Reaction {
+  id        String   @id @default(cuid())
+  clipId    String
+  userId    String
+  emote     String
+  createdAt DateTime @default(now())
+
+  clip Clip @relation(fields: [clipId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([clipId, userId, emote])
+}
+
+// ---------------------------------------------------------------- communities
+
+model Community {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  name        String
+  tagline     String
+  description String
+  gameId      String?
+  iconUrl     String?
+  bannerUrl   String?
+  memberCount Int      @default(0)
+  isPublic    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  game       Game?              @relation(fields: [gameId], references: [id])
+  channels   CommunityChannel[]
+  members    CommunityMember[]
+  voiceRooms VoiceRoom[]
+}
+
+enum ChannelKind {
+  TEXT
+  ANNOUNCEMENT
+  VOICE
+  CLIPS
+  EVENTS
+}
+
+model CommunityChannel {
+  id          String      @id @default(cuid())
+  communityId String
+  name        String
+  kind        ChannelKind @default(TEXT)
+  topic       String?
+  position    Int         @default(0)
+
+  community Community       @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  posts     CommunityPost[]
+
+  @@unique([communityId, name])
+}
+
+model CommunityPost {
+  id          String    @id @default(cuid())
+  channelId   String
+  authorId    String
+  body        String
+  pinned      Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  // Soft-deleted, not removed: a moderator deleting someone else's post is
+  // a moderation action, and hard-deleting left no record of it. Deleted
+  // posts stay out of channel queries but the row (and who deleted it)
+  // survives for accountability.
+  deletedAt   DateTime?
+  deletedById String?
+
+  channel CommunityChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@index([channelId, createdAt])
+}
+
+enum CommunityRole {
+  MEMBER
+  MODERATOR
+  ADMIN
+  OWNER
+}
+
+model CommunityMember {
+  id          String        @id @default(cuid())
+  communityId String
+  userId      String
+  role        CommunityRole @default(MEMBER)
+  points      Int           @default(0)
+  joinedAt    DateTime      @default(now())
+
+  community Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([communityId, userId])
+}
+
+model VoiceRoom {
+  id          String  @id @default(cuid())
+  communityId String?
+  teamId      String?
+  name        String
+  capacity    Int     @default(10)
+  locked      Boolean @default(false)
+
+  community    Community?         @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  team         Team?              @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  participants VoiceParticipant[]
+}
+
+model VoiceParticipant {
+  id       String   @id @default(cuid())
+  roomId   String
+  userId   String
+  muted    Boolean  @default(false)
+  deafened Boolean  @default(false)
+  speaking Boolean  @default(false)
+  joinedAt DateTime @default(now())
+
+  room VoiceRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([roomId, userId])
+}
+
+// ---------------------------------------------------------------- teams
+
+model Team {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  name        String
+  tag         String // 3–4 char scoreboard tag
+  ownerId     String
+  description String?
+  logoSeed    String // deterministic seed for the generated emblem — no borrowed logos
+  bannerUrl   String?
+  region      String
+  wins        Int      @default(0)
+  losses      Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  owner         User                     @relation("teamOwner", fields: [ownerId], references: [id])
+  members       TeamMember[]
+  invites       TeamInvite[]
+  games         TeamGame[]
+  registrations TournamentRegistration[]
+  entries       TournamentTeam[]
+  openings      TeamOpening[]
+  voiceRooms    VoiceRoom[]
+  homeMatches   TournamentMatch[]        @relation("homeTeam")
+  awayMatches   TournamentMatch[]        @relation("awayTeam")
+}
+
+model TeamGame {
+  id     String @id @default(cuid())
+  teamId String
+  gameId String
+
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  game Game @relation(fields: [gameId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, gameId])
+}
+
+enum TeamRole {
+  OWNER
+  CAPTAIN
+  PLAYER
+  SUBSTITUTE
+  COACH
+  ANALYST
+  MANAGER
+}
+
+model TeamMember {
+  id       String   @id @default(cuid())
+  teamId   String
+  userId   String
+  role     TeamRole @default(PLAYER)
+  position String? // in-game role
+  joinedAt DateTime @default(now())
+
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, userId])
+}
+
+// A row's existence is the pending state — there's no `status` field.
+// Accepting deletes the invite and creates the matching TeamMember, in one
+// transaction; declining just deletes it. Known gap: decline leaves no
+// record behind, so nothing stops the same person from being re-invited an
+// unlimited number of times after declining. Not solved here — would need
+// either a status field (with the TeamMember-consumer audit that was
+// avoided by not doing this on TeamMember) or a separate log/cooldown.
+model TeamInvite {
+  id          String   @id @default(cuid())
+  teamId      String
+  userId      String // recipient
+  invitedById String // must be OWNER or CAPTAIN at invite time — enforced in the action, not here
+  role        TeamRole @default(PLAYER)
+  createdAt   DateTime @default(now())
+
+  team      Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user      User @relation("teamInviteRecipient", fields: [userId], references: [id], onDelete: Cascade)
+  invitedBy User @relation("teamInviteSender", fields: [invitedById], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, userId])
+}
+
+model TeamOpening {
+  id           String   @id @default(cuid())
+  teamId       String
+  position     String
+  minTier      String?
+  region       String?
+  availability String?
+  open         Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+}
+
+// ---------------------------------------------------------------- LFG
+
+model LFGPost {
+  id          String    @id @default(cuid())
+  userId      String
+  gameId      String
+  body        String
+  needed      Int       @default(1)
+  minTier     String?
+  maxTier     String?
+  region      String
+  platform    String?
+  language    String    @default("en")
+  role        String?
+  competitive Boolean   @default(false)
+  micRequired Boolean   @default(true)
+  playsAt     DateTime?
+  open        Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  game Game @relation(fields: [gameId], references: [id], onDelete: Cascade)
+
+  @@index([gameId, open, createdAt])
+}
+
+// ---------------------------------------------------------------- tournaments
+
+enum BracketFormat {
+  SINGLE_ELIMINATION
+  DOUBLE_ELIMINATION
+  ROUND_ROBIN
+}
+
+enum TournamentStatus {
+  DRAFT
+  REGISTRATION_OPEN
+  REGISTRATION_CLOSED
+  LIVE
+  COMPLETED
+  CANCELLED
+}
+
+model Tournament {
+  id                   String           @id @default(cuid())
+  slug                 String           @unique
+  name                 String
+  organizerId          String
+  gameId               String
+  description          String
+  bannerUrl            String?
+  region               String
+  format               BracketFormat    @default(SINGLE_ELIMINATION)
+  teamSize             Int              @default(5)
+  maxTeams             Int              @default(8)
+  status               TournamentStatus @default(REGISTRATION_OPEN)
+  registrationOpensAt  DateTime
+  registrationClosesAt DateTime
+  startsAt             DateTime
+  rules                String
+  prizePool            Int              @default(0)
+  prizeCurrency        String           @default("USD")
+  entryFee             Int              @default(0)
+  createdAt            DateTime         @default(now())
+
+  organizer     User                     @relation("tournamentOrganizer", fields: [organizerId], references: [id])
+  game          Game                     @relation(fields: [gameId], references: [id])
+  registrations TournamentRegistration[]
+  teams         TournamentTeam[]
+  matches       TournamentMatch[]
+
+  @@index([status, startsAt])
+}
+
+enum RegistrationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  WITHDRAWN
+}
+
+model TournamentRegistration {
+  id           String             @id @default(cuid())
+  tournamentId String
+  teamId       String
+  status       RegistrationStatus @default(PENDING)
+  roster       String[] // locked user ids at approval time
+  note         String?
+  createdAt    DateTime           @default(now())
+
+  tournament Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  team       Team       @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@unique([tournamentId, teamId])
+}
+
+model TournamentTeam {
+  id           String  @id @default(cuid())
+  tournamentId String
+  teamId       String
+  seed         Int
+  eliminated   Boolean @default(false)
+  wins         Int     @default(0)
+  losses       Int     @default(0)
+  points       Int     @default(0) // round robin standings
+
+  tournament Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  team       Team       @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@unique([tournamentId, teamId])
+  @@unique([tournamentId, seed])
+}
+
+enum BracketSide {
+  WINNERS
+  LOSERS
+  GRAND_FINAL
+  GROUP
+}
+
+enum MatchState {
+  PENDING
+  READY
+  LIVE
+  AWAITING_CONFIRMATION
+  DISPUTED
+  COMPLETED
+  BYE
+}
+
+model TournamentMatch {
+  id           String      @id @default(cuid())
+  tournamentId String
+  round        Int
+  position     Int // position within the round, top to bottom
+  side         BracketSide @default(WINNERS)
+  bestOf       Int         @default(1)
+  homeTeamId   String?
+  awayTeamId   String?
+  homeScore    Int         @default(0)
+  awayScore    Int         @default(0)
+  state        MatchState  @default(PENDING)
+  scheduledAt  DateTime?
+  streamUrl    String?
+  winnerNextId String? // match this winner advances into
+  loserNextId  String? // double elimination drop
+  createdAt    DateTime    @default(now())
+
+  tournament Tournament        @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  homeTeam   Team?             @relation("homeTeam", fields: [homeTeamId], references: [id])
+  awayTeam   Team?             @relation("awayTeam", fields: [awayTeamId], references: [id])
+  winnerNext TournamentMatch?  @relation("winnerFeed", fields: [winnerNextId], references: [id], onDelete: SetNull)
+  feedsWin   TournamentMatch[] @relation("winnerFeed")
+  loserNext  TournamentMatch?  @relation("loserFeed", fields: [loserNextId], references: [id], onDelete: SetNull)
+  feedsLoss  TournamentMatch[] @relation("loserFeed")
+  result     MatchResult?
+
+  @@unique([tournamentId, side, round, position])
+  @@index([tournamentId, round])
+}
+
+model MatchResult {
+  id            String   @id @default(cuid())
+  matchId       String   @unique
+  winnerTeamId  String?
+  homeScore     Int
+  awayScore     Int
+  maps          Json? // per-map scores
+  reportedById  String
+  confirmedById String?
+  disputed      Boolean  @default(false)
+  disputeNote   String?
+  createdAt     DateTime @default(now())
+
+  match TournamentMatch @relation(fields: [matchId], references: [id], onDelete: Cascade)
+}
+
+// ---------------------------------------------------------------- progression
+
+enum AchievementTier {
+  BRONZE
+  SILVER
+  GOLD
+  PLATINUM
+}
+
+model Achievement {
+  id          String          @id @default(cuid())
+  slug        String          @unique
+  name        String
+  description String
+  tier        AchievementTier @default(BRONZE)
+  xpReward    Int             @default(100)
+  badgeShape  String          @default("hex") // drives the generated badge artwork
+
+  unlocks UserAchievement[]
+}
+
+model UserAchievement {
+  id            String   @id @default(cuid())
+  userId        String
+  achievementId String
+  unlockedAt    DateTime @default(now())
+
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  achievement Achievement @relation(fields: [achievementId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, achievementId])
+}
+
+// ---------------------------------------------------------------- messaging
+
+model Conversation {
+  id        String   @id @default(cuid())
+  title     String?
+  isGroup   Boolean  @default(false)
+  teamId    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members  ConversationMember[]
+  messages Message[]
+}
+
+model ConversationMember {
+  id             String    @id @default(cuid())
+  conversationId String
+  userId         String
+  lastReadAt     DateTime?
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, userId])
+}
+
+enum MessageKind {
+  TEXT
+  CLIP
+  STREAM
+  TEAM_INVITE
+  TOURNAMENT_INVITE
+  PARTY_INVITE
+}
+
+model Message {
+  id             String      @id @default(cuid())
+  conversationId String
+  senderId       String
+  kind           MessageKind @default(TEXT)
+  body           String
+  payload        Json?
+  createdAt      DateTime    @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       User         @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+}
+
+// ---------------------------------------------------------------- ops
+
+enum NotificationKind {
+  STREAM_LIVE
+  TEAM_INVITE
+  TOURNAMENT_REMINDER
+  TOURNAMENT_APPLICATION
+  MATCH_READY
+  MATCH_RESULT_REPORTED
+  MATCH_DISPUTED
+  MATCH_CONFIRMED
+  COMMENT_REPLY
+  CLIP_MILESTONE
+  CLIP_SHARED
+  FOLLOW
+  CONTENT_HIDDEN
+  ACCOUNT_SUSPENDED
+  ACCOUNT_REINSTATED
+  SYSTEM
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  kind      NotificationKind
+  title     String
+  body      String
+  href      String // deep link to the exact screen
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+}
+
+enum ReportTarget {
+  USER
+  CHAT_MESSAGE
+  CLIP
+  COMMENT
+  TEAM
+  COMMUNITY
+  COMMUNITY_POST
+  TOURNAMENT
+}
+
+enum ReportStatus {
+  OPEN
+  ACTIONED
+  DISMISSED
+}
+
+model Report {
+  id         String       @id @default(cuid())
+  reporterId String
+  // The user ultimately accountable for what's being reported — the
+  // clip's uploader, the post's author, or (when target is USER) the
+  // reported user themselves. Set regardless of target, so a moderator
+  // can suspend "whoever's responsible for this" without the queue
+  // needing target-specific lookup logic just to find them.
+  reportedId String?
+  target     ReportTarget
+  targetId   String
+  reason     String
+  details    String?
+  status     ReportStatus @default(OPEN)
+  // Who actioned/dismissed this and when — the same "attribute the
+  // moderation action, don't just erase the trail" stance as
+  // CommunityPost.deletedAt/deletedById above.
+  resolvedAt   DateTime?
+  resolvedById String?
+
+  createdAt DateTime @default(now())
+
+  reporter   User  @relation("reporter", fields: [reporterId], references: [id], onDelete: Cascade)
+  reported   User? @relation("reported", fields: [reportedId], references: [id], onDelete: SetNull)
+  resolvedBy User? @relation("reportResolver", fields: [resolvedById], references: [id], onDelete: SetNull)
+
+  // One open report per (reporter, thing) — stops the same person
+  // reporting the same clip/post/user twice. A person who un-reports by
+  // some other means and reports again isn't a case this app supports
+  // (there's no "withdraw a report" action), so this is a hard cap, not
+  // a per-status one.
+  @@unique([reporterId, target, targetId])
+  @@index([status, createdAt])
+}
+
+enum BanScope {
+  PLATFORM
+  CHANNEL
+  COMMUNITY
+}
+
+model Ban {
+  id         String    @id @default(cuid())
+  userId     String
+  issuedById String
+  scope      BanScope  @default(CHANNEL)
+  scopeId    String? // channel or community id when scope is not PLATFORM
+  reason     String
+  expiresAt  DateTime? // null = permanent
+  createdAt  DateTime  @default(now())
+
+  user     User @relation("bannedUser", fields: [userId], references: [id], onDelete: Cascade)
+  issuedBy User @relation("bannedBy", fields: [issuedById], references: [id], onDelete: Cascade)
+
+  @@index([userId, scope])
+}
+
+enum AdminActionKind {
+  ROLE_CHANGE
+  SUSPENSION_LIFTED
+}
+
+// Audit trail for the admin console (src/app/(app)/admin/users) — the same
+// "attribute it, don't just erase the trail" stance as Report.resolvedById
+// and CommunityPost.deletedById above, but as its own append-only log
+// rather than fields on User, since a single account can rack up several
+// of these over time and each one is worth keeping, not just the latest.
+model AdminAction {
+  id         String           @id @default(cuid())
+  userId     String
+  actedById  String
+  kind       AdminActionKind
+  fromRole   UserRole?
+  toRole     UserRole?
+  fromStatus AccountStatus?
+  toStatus   AccountStatus?
+  createdAt  DateTime         @default(now())
+
+  user    User @relation("adminActionTarget", fields: [userId], references: [id], onDelete: Cascade)
+  actedBy User @relation("adminActionActor", fields: [actedById], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
