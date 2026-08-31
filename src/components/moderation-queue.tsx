@@ -217,7 +217,7 @@ function ReportRow({ item, onResolved }: { item: ModerationReportItem; onResolve
         {canSuspend && (
           <button
             type="button"
-            className="btn border-live/60 text-live hover:bg-live/10"
+            className="btn btn-danger"
             disabled={isPending}
             onClick={handleSuspend}
           >

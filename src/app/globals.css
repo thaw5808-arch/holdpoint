@@ -53,8 +53,21 @@
   --mobile-nav-clearance: 76px;
 }
 
-* {
-  border-color: var(--color-line);
+/* In @layer base (not bare `*`) so it sits where Tailwind's own utilities
+   layer (@layer utilities, populated by @import "tailwindcss" above) can
+   still beat it — cascade layers order by layer first, specificity only
+   within a layer, so an unlayered rule always wins regardless of layer
+   order but a layered "base" rule always loses to a layered "utilities"
+   one. Tailwind v4 dropped preflight's old default border-color for
+   exactly this reason (see the v4 upgrade guide); this is that same
+   opt-back-in snippet, done the way it's documented rather than as a
+   bare `*` rule, which used to silently beat every `border-{color}`
+   utility in the app (still does, wherever one hasn't been ported to a
+   real class below — see .btn/.input/.card-select's own comments). */
+@layer base {
+  * {
+    border-color: var(--color-line);
+  }
 }
 
 html,
@@ -180,14 +193,14 @@ body {
 
 /* ---------------------------------------------------------- selection
    Shared "this is picked" outline for multi-select cards/rows (the
-   onboarding game grid and goals list; anywhere else that needs the same
-   treatment should reuse this rather than reaching for Tailwind's
-   border-{color} utilities). Deliberately plain, unlayered CSS: the
-   `* { border-color: var(--color-line); }` reset near the top of this
-   file is itself unlayered, so it silently wins over ANY `border-*`
-   Tailwind utility regardless of source order or specificity — a
-   `border-signal` class here would compile fine and simply never
-   render, the same reason .btn/.input above stay unlayered too. */
+   onboarding game grid and goals list). Plain CSS mainly because it
+   bundles border + background tint + box-shadow ring + hover into one
+   reusable state, not to dodge the `*` reset above — that reset now
+   lives in @layer base, so a bare `border-signal` utility elsewhere in
+   the app renders normally; it doesn't need this kind of escape hatch
+   anymore. (It still would if it were paired with .btn/.input/.card-select
+   themselves, which stay unlayered on purpose — see .btn's comment
+   below.) */
 .card-select {
   border: 1px solid var(--color-line);
   background: var(--color-surface);
@@ -307,6 +320,21 @@ textarea:focus-visible {
 .btn-ghost:hover {
   color: var(--color-text);
   background: var(--color-surface);
+}
+
+/* A destructive .btn (e.g. "Suspend user" in moderation-queue.tsx) can't
+   get there by pairing .btn with a Tailwind border-live utility — .btn's
+   own border-color is plain unlayered CSS, so it always wins over a
+   layered utility class regardless of the @layer base fix above; only
+   another unlayered rule can override it, same as .btn-primary/.btn-ghost
+   already have to be. */
+.btn-danger {
+  border-color: var(--color-live);
+  color: var(--color-live);
+}
+
+.btn-danger:hover {
+  background: color-mix(in srgb, var(--color-live) 10%, transparent);
 }
 
 .input {
