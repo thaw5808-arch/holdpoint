@@ -7,6 +7,7 @@ import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { avatarSrc } from "@/lib/avatar-url";
 import type { ClipMessagePayload } from "@/lib/clip-message";
+import { fetchClipFeedPage, type ClipFeedCursor, type FeedClip } from "@/lib/clips";
 import { compactNumber, duration as formatDuration } from "@/lib/format";
 import { notify } from "@/lib/notify";
 import { extractPosterFrame } from "@/lib/poster";
@@ -489,6 +490,22 @@ export async function recordClipViewAction(clipId: string): Promise<RecordClipVi
   const sessionId = await getCurrentSessionId();
   if (!sessionId) return { error: "You need to be logged in." };
   return recordClipView(clipId, sessionId);
+}
+
+export type LoadMoreClipsResult = { clips: FeedClip[]; nextCursor: ClipFeedCursor | null } | { error: string };
+
+/**
+ * The feed's "load next batch" call — ClipFeed fires this once the active
+ * clip gets within a few of the end of what's already loaded. All the
+ * actual pagination logic (keyset, not offset — see the comment on
+ * fetchClipFeedPage) lives there so this page's first batch (in
+ * app/(app)/clips/page.tsx) and every batch after it come from the exact
+ * same query and shaping.
+ */
+export async function loadMoreClipsAction(cursor: ClipFeedCursor): Promise<LoadMoreClipsResult> {
+  const user = await getCurrentUser();
+  if (!user) return { error: "You need to be logged in." };
+  return fetchClipFeedPage({ viewerId: user.id, cursor });
 }
 
 export type ClipCommentData = {

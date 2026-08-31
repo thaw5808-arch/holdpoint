@@ -1,35 +1,25 @@
 "use client";
 
 import { useEffect, useRef, useState, useTransition } from "react";
+import { Loader2 } from "lucide-react";
 import { ClipCommentsPanel } from "@/components/clip-comments-panel";
 import { ClipDeleteConfirm } from "@/components/clip-delete-confirm";
 import { ClipShareSheet } from "@/components/clip-share-sheet";
 import { ClipStage } from "@/components/clip-stage";
 import { ReportDialog } from "@/components/report-dialog";
 import { EmptyState } from "@/components/ui";
-import { toggleClipLikeAction, toggleClipSaveAction } from "@/lib/actions/clip";
+import { loadMoreClipsAction, toggleClipLikeAction, toggleClipSaveAction } from "@/lib/actions/clip";
+import type { ClipFeedCursor, FeedClip } from "@/lib/clips";
 
-export interface FeedClip {
-  id: string;
-  userId: string;
-  slug: string;
-  title: string;
-  caption: string | null;
-  displayName: string;
-  username: string;
-  avatarUrl?: string | null;
-  game: string | null;
-  views: number;
-  playbackUrl?: string | null;
-  posterUrl?: string | null;
-  likes: number;
-  saves: number;
-  comments: number;
-  liked: boolean;
-  saved: boolean;
-}
+export type { FeedClip };
 
 type ReactionState = { liked: boolean; likes: number; saved: boolean; saves: number };
+
+// How close to the end of what's already loaded the active clip has to be
+// before the next batch is fetched — small enough that it's not firing on
+// every scroll, large enough that a new batch is usually there by the time
+// the user actually reaches the end.
+const LOAD_MORE_LOOKAHEAD = 3;
 
 /** True while a keydown's target is a place that should own its own
  * keystrokes — a focused text input shouldn't have "j" or "k" hijacked
@@ -43,7 +33,15 @@ function isTypingTarget(target: EventTarget | null) {
  * Vertical clip feed. On desktop the video keeps its 9:16 frame instead of
  * being stretched, and j/k or arrow keys move between clips.
  */
-export function ClipFeed({ clips, viewerId }: { clips: FeedClip[]; viewerId: string }) {
+export function ClipFeed({
+  clips,
+  viewerId,
+  initialCursor,
+}: {
+  clips: FeedClip[];
+  viewerId: string;
+  initialCursor: ClipFeedCursor | null;
+}) {
   // Which clip is "active" — the one that should be playing — driven
   // entirely by scroll position via the IntersectionObserver below, not by
   // whatever last moved focus. That's deliberate: mouse-wheel scrolling,
@@ -63,6 +61,17 @@ export function ClipFeed({ clips, viewerId }: { clips: FeedClip[]; viewerId: str
   // count state below, so a delete can drop a clip out of the list without
   // waiting on a server round-trip to re-render with fresh props.
   const [items, setItems] = useState(clips);
+  // null once the feed is exhausted; otherwise the (views, createdAt, id)
+  // of the last clip currently in `items`, ready to hand straight to
+  // loadMoreClipsAction. See fetchClipFeedPage in lib/clips.ts for why
+  // this is a cursor and not a page number/offset.
+  const [cursor, setCursor] = useState(initialCursor);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  // Synchronous guard against firing a second batch request before the
+  // first one's setCursor/setIsLoadingMore have committed — the effect
+  // below can re-run several times in the gap between "scrolled close to
+  // the end" and "the fetch actually landed".
+  const loadMoreInFlight = useRef(false);
   const container = useRef<HTMLDivElement>(null);
   // Keyed by clip id rather than array position so a ref never goes stale
   // if `clips` is ever reordered — populated by the ref callback on each
@@ -129,6 +138,56 @@ export function ClipFeed({ clips, viewerId }: { clips: FeedClip[]; viewerId: str
   const [commentCounts, setCommentCounts] = useState<Record<string, number>>(() =>
     Object.fromEntries(clips.map((clip) => [clip.id, clip.comments])),
   );
+
+  // Fetches the next batch once the active clip — the same signal the
+  // autoplay observer above produces, not a separate scroll listener —
+  // gets within LOAD_MORE_LOOKAHEAD of the end of what's loaded. Appending
+  // to `items` is all this does to the DOM; the observer effect above
+  // re-runs off that same `items` change and picks up the newly-mounted
+  // sections on its own, so this never touches activeClipId or which clip
+  // is playing.
+  useEffect(() => {
+    if (!cursor || loadMoreInFlight.current) return;
+    const activeIndex = items.findIndex((clip) => clip.id === activeClipId);
+    if (activeIndex === -1) return;
+    if (items.length - 1 - activeIndex > LOAD_MORE_LOOKAHEAD) return;
+
+    loadMoreInFlight.current = true;
+    setIsLoadingMore(true);
+    startTransition(async () => {
+      const result = await loadMoreClipsAction(cursor);
+      if ("error" in result) {
+        // Left as-is rather than nulled out: if the active clip is still
+        // within the lookahead window next time this effect runs (e.g. the
+        // user nudges the scroll position again), it just retries.
+        setIsLoadingMore(false);
+        loadMoreInFlight.current = false;
+        return;
+      }
+
+      setItems((current) => {
+        const seen = new Set(current.map((clip) => clip.id));
+        return [...current, ...result.clips.filter((clip) => !seen.has(clip.id))];
+      });
+      setReactions((state) => {
+        const additions = Object.fromEntries(
+          result.clips
+            .filter((clip) => !(clip.id in state))
+            .map((clip) => [clip.id, { liked: clip.liked, likes: clip.likes, saved: clip.saved, saves: clip.saves }]),
+        );
+        return { ...state, ...additions };
+      });
+      setCommentCounts((state) => {
+        const additions = Object.fromEntries(
+          result.clips.filter((clip) => !(clip.id in state)).map((clip) => [clip.id, clip.comments]),
+        );
+        return { ...state, ...additions };
+      });
+      setCursor(result.nextCursor);
+      setIsLoadingMore(false);
+      loadMoreInFlight.current = false;
+    });
+  }, [activeClipId, items, cursor, startTransition]);
 
   // j/k and the arrow keys just move the scroll position — one section
   // over from wherever the observer currently says is active — and rely
@@ -268,6 +327,23 @@ export function ClipFeed({ clips, viewerId }: { clips: FeedClip[]; viewerId: str
           </section>
         );
       })}
+
+      {/* Trailing status block, not a clip section — no snap-* class, so it
+          never becomes a snap stop of its own and doesn't feed the
+          autoplay IntersectionObserver above (that one only watches
+          [data-clip-id] sections). Purely a function of state; scrolling
+          here doesn't trigger anything itself, the fetch already started
+          once the active clip got close (see the effect above). */}
+      <div className="flex h-28 shrink-0 items-center justify-center">
+        {isLoadingMore ? (
+          <p className="eyebrow flex items-center gap-2 text-faint">
+            <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+            Loading more…
+          </p>
+        ) : cursor === null ? (
+          <p className="eyebrow text-faint">You&apos;re all caught up</p>
+        ) : null}
+      </div>
 
       {shareSheetClip && (
         <ClipShareSheet
