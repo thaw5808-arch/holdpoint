@@ -337,6 +337,38 @@ textarea:focus-visible {
   background: color-mix(in srgb, var(--color-live) 10%, transparent);
 }
 
+/* A bare icon-only control (e.g. the hover-revealed rename/delete pair on
+   a community-channel-nav row) — deliberately NOT .btn: .btn's own
+   padding is plain unlayered CSS too, so pairing it with a Tailwind
+   padding utility to shrink it down runs into the exact same "unlayered
+   always wins" trap as .btn-danger's comment above describes for
+   border-color — four full-size .btn's is what squeezed the channel name
+   out of the sidebar in the first place. This stays small on its own,
+   nothing to override. */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.25rem;
+  color: var(--color-faint);
+  transition: background var(--dur), color var(--dur);
+}
+
+.icon-btn:hover {
+  background: var(--color-line);
+  color: var(--color-text);
+}
+
+.icon-btn:disabled {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+.icon-btn-danger:hover {
+  background: color-mix(in srgb, var(--color-live) 12%, transparent);
+  color: var(--color-live);
+}
+
 .input {
   width: 100%;
   background: var(--color-ink);

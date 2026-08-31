@@ -522,6 +522,14 @@ model CommunityChannel {
   kind        ChannelKind @default(TEXT)
   topic       String?
   position    Int         @default(0)
+  // Soft-deleted, not removed — same reasoning as CommunityPost.deletedAt
+  // below: a moderator deleting a channel is a moderation/management
+  // action, and hard-deleting it would cascade-erase every post inside
+  // (including any already moderator-hidden, which exists specifically to
+  // keep a record) with nothing left to show it happened, and would free
+  // up the channel name for silent reuse.
+  deletedAt   DateTime?
+  deletedById String?
 
   community Community       @relation(fields: [communityId], references: [id], onDelete: Cascade)
   posts     CommunityPost[]

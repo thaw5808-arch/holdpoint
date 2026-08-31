@@ -3,10 +3,28 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
+import { CHANNEL_KINDS } from "@/lib/channel-kinds";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/session";
 
 const MOD_ROLES = new Set(["MODERATOR", "ADMIN", "OWNER"]);
+
+/** Re-checks `userId`'s standing in `communityId` from the DB — shared by
+ * every channel-management action below, the same "the page only hiding a
+ * control isn't the authorization boundary" stance as the post actions
+ * already take on MOD_ROLES. */
+async function requireCommunityModerator(
+  communityId: string,
+  userId: string,
+): Promise<{ error: string } | { ok: true }> {
+  const membership = await prisma.communityMember.findUnique({
+    where: { communityId_userId: { communityId, userId } },
+  });
+  if (!membership || !MOD_ROLES.has(membership.role)) {
+    return { error: "You don't have permission to do that." };
+  }
+  return { ok: true };
+}
 
 function slugify(name: string) {
   const base = name
@@ -217,9 +235,9 @@ export async function createCommunityPostAction(
 
   const channel = await prisma.communityChannel.findUnique({
     where: { id: parsed.data.channelId },
-    select: { id: true, communityId: true, kind: true },
+    select: { id: true, communityId: true, kind: true, deletedAt: true },
   });
-  if (!channel) return { error: "That channel no longer exists." };
+  if (!channel || channel.deletedAt) return { error: "That channel no longer exists." };
 
   const membership = await prisma.communityMember.findUnique({
     where: { communityId_userId: { communityId: channel.communityId, userId: user.id } },
@@ -228,6 +246,12 @@ export async function createCommunityPostAction(
 
   if (channel.kind === "ANNOUNCEMENT" && !MOD_ROLES.has(membership.role)) {
     return { error: "Only moderators can post in an announcement channel." };
+  }
+  // VOICE channels have no text UI at all — see VoiceChannelView in
+  // [slug]/page.tsx — so this can't just be a client-side omission of the
+  // composer; a direct call has to be rejected here too.
+  if (channel.kind === "VOICE") {
+    return { error: "You can't post text messages in a voice channel." };
   }
 
   await prisma.communityPost.create({
@@ -293,4 +317,221 @@ export async function deleteCommunityPostAction(postId: string): Promise<DeleteC
 
   revalidatePath("/", "layout");
   return { deleted: true };
+}
+
+// ---------------------------------------------------------- channels
+// Create/rename/delete/reorder — every one of these re-derives the
+// caller's CommunityMember role from the DB via requireCommunityModerator
+// above, never from a client-supplied flag, since the sidebar only
+// hiding these controls for a non-moderator is a display nicety.
+
+const channelNameSchema = z
+  .string()
+  .trim()
+  .min(2, "Use at least 2 characters")
+  .max(30, "Keep it under 30 characters");
+
+// Channel names double as their URL identifier (see the `?channel=`
+// query param on the community page), the same reason team/community
+// names get turned into slugs — so a channel is named the same way, with
+// its own local slugify rather than importing the other actions files'
+// (each of Team/Community/Clip already keeps its own copy of this exact
+// shape, not a shared helper).
+function slugifyChannelName(name: string) {
+  const base = name
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return base || "channel";
+}
+
+/** Appends -2, -3, … until it finds a name nothing else in the community
+ * is using — scoped to communityId since @@unique([communityId, name]) is
+ * per-community, not global. Considers soft-deleted channels too (their
+ * rows, and the unique constraint on their name, still exist), and can
+ * exclude a channel's own id so renaming it to a name it already has —
+ * or a name only it was using — doesn't get suffixed against itself. */
+async function uniqueChannelName(communityId: string, base: string, excludeChannelId?: string) {
+  let name = base;
+  for (
+    let suffix = 2;
+    await prisma.communityChannel.findFirst({
+      where: { communityId, name, ...(excludeChannelId ? { id: { not: excludeChannelId } } : {}) },
+      select: { id: true },
+    });
+    suffix++
+  ) {
+    name = `${base}-${suffix}`;
+  }
+  return name;
+}
+
+const createChannelSchema = z.object({
+  communityId: z.string().min(1),
+  name: channelNameSchema,
+  kind: z.enum(CHANNEL_KINDS),
+});
+
+export type CreateCommunityChannelResult =
+  | { created: true; channel: { id: string; name: string; kind: string } }
+  | { error: string };
+
+/** Adds a channel to the end of the sidebar (highest position + 1). */
+export async function createCommunityChannelAction(
+  communityId: string,
+  name: string,
+  kind: string,
+): Promise<CreateCommunityChannelResult> {
+  const user = await getCurrentUser();
+  if (!user) return { error: "You need to be logged in." };
+
+  const parsed = createChannelSchema.safeParse({ communityId, name, kind });
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Invalid channel." };
+
+  const auth = await requireCommunityModerator(parsed.data.communityId, user.id);
+  if ("error" in auth) return auth;
+
+  const channelName = await uniqueChannelName(parsed.data.communityId, slugifyChannelName(parsed.data.name));
+  const highest = await prisma.communityChannel.aggregate({
+    where: { communityId: parsed.data.communityId },
+    _max: { position: true },
+  });
+
+  const channel = await prisma.communityChannel.create({
+    data: {
+      communityId: parsed.data.communityId,
+      name: channelName,
+      kind: parsed.data.kind,
+      position: (highest._max.position ?? -1) + 1,
+    },
+  });
+
+  revalidatePath("/", "layout");
+  return { created: true, channel: { id: channel.id, name: channel.name, kind: channel.kind } };
+}
+
+const renameChannelSchema = z.object({ channelId: z.string().min(1), name: channelNameSchema });
+
+export type RenameCommunityChannelResult = { renamed: true; name: string } | { error: string };
+
+export async function renameCommunityChannelAction(
+  channelId: string,
+  name: string,
+): Promise<RenameCommunityChannelResult> {
+  const user = await getCurrentUser();
+  if (!user) return { error: "You need to be logged in." };
+
+  const parsed = renameChannelSchema.safeParse({ channelId, name });
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Invalid name." };
+
+  const channel = await prisma.communityChannel.findUnique({
+    where: { id: parsed.data.channelId },
+    select: { id: true, communityId: true, deletedAt: true },
+  });
+  if (!channel || channel.deletedAt) return { error: "That channel no longer exists." };
+
+  const auth = await requireCommunityModerator(channel.communityId, user.id);
+  if ("error" in auth) return auth;
+
+  const newName = await uniqueChannelName(channel.communityId, slugifyChannelName(parsed.data.name), channel.id);
+
+  await prisma.communityChannel.update({ where: { id: channel.id }, data: { name: newName } });
+
+  revalidatePath("/", "layout");
+  return { renamed: true, name: newName };
+}
+
+const channelIdInput = z.object({ channelId: z.string().min(1) });
+
+export type DeleteCommunityChannelResult = { deleted: true } | { error: string };
+
+/**
+ * Soft-deletes a channel — see the schema comment on
+ * CommunityChannel.deletedAt for why this doesn't touch its posts. Blocked
+ * when it's the last channel standing: a community with zero channels has
+ * nowhere for [slug]/page.tsx's `active` channel resolution to fall back
+ * to, and nowhere left to post.
+ */
+export async function deleteCommunityChannelAction(channelId: string): Promise<DeleteCommunityChannelResult> {
+  const user = await getCurrentUser();
+  if (!user) return { error: "You need to be logged in." };
+
+  const parsed = channelIdInput.safeParse({ channelId });
+  if (!parsed.success) return { error: "Invalid channel." };
+
+  const channel = await prisma.communityChannel.findUnique({
+    where: { id: parsed.data.channelId },
+    select: { id: true, communityId: true, deletedAt: true },
+  });
+  if (!channel || channel.deletedAt) return { error: "That channel no longer exists." };
+
+  const auth = await requireCommunityModerator(channel.communityId, user.id);
+  if ("error" in auth) return auth;
+
+  const remaining = await prisma.communityChannel.count({
+    where: { communityId: channel.communityId, deletedAt: null },
+  });
+  if (remaining <= 1) return { error: "A community needs at least one channel." };
+
+  await prisma.communityChannel.update({
+    where: { id: channel.id },
+    data: { deletedAt: new Date(), deletedById: user.id },
+  });
+
+  revalidatePath("/", "layout");
+  return { deleted: true };
+}
+
+const reorderChannelsSchema = z.object({
+  communityId: z.string().min(1),
+  channelIds: z.array(z.string().min(1)).min(1),
+});
+
+export type ReorderCommunityChannelsResult = { reordered: true } | { error: string };
+
+/**
+ * Persists a full drag-and-drop reorder in one go: `channelIds` is the
+ * complete list of a community's visible channels in their new order, and
+ * every channel in it gets re-numbered to its index in that array. Simpler
+ * and more robust than a series of pairwise neighbor-swaps (what this
+ * replaced) for an arbitrary drag distance — dragging a channel from the
+ * top to the bottom is one call instead of N.
+ *
+ * Any id in `channelIds` that isn't actually a live channel of this
+ * community any more (deleted, or from a stale/tampered payload) is
+ * silently dropped rather than trusted — a concurrent delete mid-drag
+ * shouldn't be able to reposition something else by proxy.
+ */
+export async function reorderCommunityChannelsAction(
+  communityId: string,
+  channelIds: string[],
+): Promise<ReorderCommunityChannelsResult> {
+  const user = await getCurrentUser();
+  if (!user) return { error: "You need to be logged in." };
+
+  const parsed = reorderChannelsSchema.safeParse({ communityId, channelIds });
+  if (!parsed.success) return { error: "Invalid request." };
+
+  const auth = await requireCommunityModerator(parsed.data.communityId, user.id);
+  if ("error" in auth) return auth;
+
+  const existing = await prisma.communityChannel.findMany({
+    where: {
+      communityId: parsed.data.communityId,
+      deletedAt: null,
+      id: { in: parsed.data.channelIds },
+    },
+    select: { id: true },
+  });
+  const existingIds = new Set(existing.map((row) => row.id));
+  const orderedIds = parsed.data.channelIds.filter((id) => existingIds.has(id));
+  if (orderedIds.length === 0) return { error: "Invalid channel order." };
+
+  await prisma.$transaction(
+    orderedIds.map((id, index) => prisma.communityChannel.update({ where: { id }, data: { position: index } })),
+  );
+
+  revalidatePath("/", "layout");
+  return { reordered: true };
 }
