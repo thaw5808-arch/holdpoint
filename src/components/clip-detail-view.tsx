@@ -28,8 +28,19 @@ export interface DetailClip extends ClipStageClip {
  * feed here to stay in, so there's nothing the panel would be floating
  * over. Like/save state is optimistic-with-rollback, same pattern as
  * ClipFeed, just scoped to one clip instead of a map keyed by id.
+ *
+ * A CLIPS-channel card opens a plain video lightbox in place instead of
+ * this (see ClipViewerModal) — comments/likes/rail are all one click away
+ * via that lightbox's "Open full page" link to here, rather than this
+ * whole layout being crammed into a box.
  */
-export function ClipDetailView({ clip, viewerId }: { clip: DetailClip; viewerId: string }) {
+export function ClipDetailView({
+  clip,
+  viewerId,
+}: {
+  clip: DetailClip;
+  viewerId: string;
+}) {
   const router = useRouter();
   const [reaction, setReaction] = useState({ liked: clip.liked, likes: clip.likes, saved: clip.saved, saves: clip.saves });
   const [commentCount, setCommentCount] = useState(clip.comments);
@@ -104,9 +115,6 @@ export function ClipDetailView({ clip, viewerId }: { clip: DetailClip; viewerId:
         <ClipDeleteConfirm
           clip={{ id: clip.id, title: clip.title }}
           onClose={() => setDeleteConfirmOpen(false)}
-          // No feed to fall back into here (this is the single-clip page)
-          // — send the viewer back to the feed instead, the way deleting
-          // any other single-item page usually returns to its list.
           onDeleted={() => router.push("/clips")}
         />
       )}

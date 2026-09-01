@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { CHANNEL_KINDS } from "@/lib/channel-kinds";
+import { clipPosterSrc } from "@/lib/clip-video-url";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/session";
 
@@ -253,6 +254,15 @@ export async function createCommunityPostAction(
   if (channel.kind === "VOICE") {
     return { error: "You can't post text messages in a voice channel." };
   }
+  // Same reasoning as VOICE above: a CLIPS channel renders a clip picker
+  // in place of the plain-text composer (see ClipsChannelComposer in
+  // [slug]/page.tsx), so a direct call has to be rejected here too rather
+  // than accepting a body-only post with no clip attached. Posting there
+  // goes through shareClipToChannelAction or finalizeChannelClipUploadAction
+  // instead, both of which require a real clipId.
+  if (channel.kind === "CLIPS") {
+    return { error: "Share a clip to post in a clips channel." };
+  }
 
   await prisma.communityPost.create({
     data: { channelId: channel.id, authorId: user.id, body: parsed.data.body },
@@ -260,6 +270,89 @@ export async function createCommunityPostAction(
 
   revalidatePath("/", "layout");
   return { created: true };
+}
+
+const shareClipInput = z.object({
+  channelId: z.string().min(1),
+  clipId: z.string().min(1),
+  caption: z.string().trim().max(280, "Keep it under 280 characters").optional(),
+});
+
+export type ShareClipToChannelResult = { created: true } | { error: string };
+
+/**
+ * Posts one of the caller's own clips into a CLIPS-kind channel — the
+ * "pick an existing clip" half of sharing a clip (see
+ * finalizeChannelClipUploadAction in actions/clip.ts for the "upload a new
+ * one" half, which reuses the presigned R2 upload + server-side poster
+ * extraction rather than this action touching R2 at all). Scoped to the
+ * caller's own clips: sharing into a channel is "post from your library",
+ * not "post any clip on the site", the same ownership check
+ * deleteClipAction applies to deleting one.
+ */
+export async function shareClipToChannelAction(
+  channelId: string,
+  clipId: string,
+  caption: string,
+): Promise<ShareClipToChannelResult> {
+  const user = await getCurrentUser();
+  if (!user) return { error: "You need to be logged in to post." };
+
+  const parsed = shareClipInput.safeParse({ channelId, clipId, caption });
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Invalid request." };
+
+  const channel = await prisma.communityChannel.findUnique({
+    where: { id: parsed.data.channelId },
+    select: { id: true, communityId: true, kind: true, deletedAt: true },
+  });
+  if (!channel || channel.deletedAt) return { error: "That channel no longer exists." };
+  if (channel.kind !== "CLIPS") return { error: "That's not a clips channel." };
+
+  const membership = await prisma.communityMember.findUnique({
+    where: { communityId_userId: { communityId: channel.communityId, userId: user.id } },
+  });
+  if (!membership) return { error: "You need to join this community to post." };
+
+  const clip = await prisma.clip.findUnique({
+    where: { id: parsed.data.clipId },
+    select: { id: true, userId: true },
+  });
+  if (!clip) return { error: "That clip no longer exists." };
+  if (clip.userId !== user.id) return { error: "You can only share your own clips." };
+
+  await prisma.communityPost.create({
+    data: { channelId: channel.id, authorId: user.id, body: parsed.data.caption ?? "", clipId: clip.id },
+  });
+
+  revalidatePath("/", "layout");
+  return { created: true };
+}
+
+export type ShareableClip = {
+  id: string;
+  slug: string;
+  title: string;
+  thumbnailUrl: string | undefined;
+  durationSec: number;
+};
+
+/**
+ * Backs the clip-share composer's "pick one of your clips" list — the
+ * caller's own clips, newest first. Same role as clipShareCandidatesAction
+ * in actions/clip.ts, but listing clips to choose from rather than people
+ * to send one to.
+ */
+export async function myClipsForChannelAction(): Promise<ShareableClip[]> {
+  const user = await getCurrentUser();
+  if (!user) return [];
+
+  const clips = await prisma.clip.findMany({
+    where: { userId: user.id },
+    select: { id: true, slug: true, title: true, thumbnailUrl: true, durationSec: true },
+    orderBy: { createdAt: "desc" },
+    take: 50,
+  });
+  return clips.map(({ thumbnailUrl, ...clip }) => ({ ...clip, thumbnailUrl: clipPosterSrc(thumbnailUrl) }));
 }
 
 const deletePostInput = z.object({ postId: z.string().min(1) });

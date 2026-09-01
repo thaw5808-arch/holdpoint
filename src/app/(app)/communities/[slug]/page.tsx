@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Avatar } from "@/components/avatar";
+import { ClipsChannelComposer } from "@/components/community-clip-composer";
 import { CommunityChannelNav } from "@/components/community-channel-nav";
 import { CommunityPostComposer, JoinToPostPrompt } from "@/components/community-post-composer";
 import { CommunityPostRow } from "@/components/community-post-row";
@@ -10,6 +11,7 @@ import { Pill, SectionHeader } from "@/components/ui";
 import { VoiceChannelView } from "@/components/voice-channel-view";
 import { avatarSrc } from "@/lib/avatar-url";
 import { CHANNEL_KIND_ICON } from "@/lib/channel-kind-icon";
+import { clipPosterSrc } from "@/lib/clip-video-url";
 import { compactNumber, relativeTime } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/session";
@@ -52,15 +54,19 @@ export default async function CommunityPage({
   const active =
     community.channels.find((entry) => entry.name === channelName) ?? community.channels[0];
   const isVoiceChannel = active?.kind === "VOICE";
+  const isClipsChannel = active?.kind === "CLIPS";
 
   // A voice channel has no posts UI at all (see VoiceChannelView below) —
-  // no reason to query CommunityPost for one.
+  // no reason to query CommunityPost for one. `clip` is included
+  // regardless of kind (cheap: it's null on every row outside a CLIPS
+  // channel) rather than branching the query itself on isClipsChannel.
   const posts =
     active && !isVoiceChannel
       ? await prisma.communityPost.findMany({
           where: { channelId: active.id, deletedAt: null },
           orderBy: { createdAt: "desc" },
           take: 20,
+          include: { clip: { select: { id: true, slug: true, title: true, durationSec: true, thumbnailUrl: true } } },
         })
       : [];
   const authors = await prisma.user.findMany({
@@ -127,12 +133,21 @@ export default async function CommunityPage({
             <>
               {user ? (
                 membership ? (
-                  <CommunityPostComposer
-                    key={active.id}
-                    channelId={active.id}
-                    channelName={active.name}
-                    canPostHere={canPostHere}
-                  />
+                  isClipsChannel ? (
+                    <ClipsChannelComposer
+                      key={active.id}
+                      channelId={active.id}
+                      channelName={active.name}
+                      canPostHere={canPostHere}
+                    />
+                  ) : (
+                    <CommunityPostComposer
+                      key={active.id}
+                      channelId={active.id}
+                      channelName={active.name}
+                      canPostHere={canPostHere}
+                    />
+                  )
                 ) : (
                   <JoinToPostPrompt communityId={community.id} />
                 )
@@ -151,9 +166,17 @@ export default async function CommunityPage({
                   return (
                     <CommunityPostRow
                       key={post.id}
+                      viewerId={user?.id}
                       post={{
                         id: post.id,
                         body: post.body,
+                        // undefined outside a CLIPS channel (no card at
+                        // all); null when this post's clip has since been
+                        // deleted (onDelete: SetNull — see schema.prisma)
+                        // so the row renders a "removed" stub instead.
+                        clip: isClipsChannel
+                          ? post.clip && { ...post.clip, thumbnailUrl: clipPosterSrc(post.clip.thumbnailUrl) }
+                          : undefined,
                         pinned: post.pinned,
                         createdAt: relativeTime(post.createdAt),
                         authorName: author?.displayName ?? "Member",
@@ -167,7 +190,9 @@ export default async function CommunityPage({
                 })}
                 {posts.length === 0 && (
                   <li className="border border-dashed border-line p-6 text-center text-sm text-muted">
-                    Nothing posted in #{active?.name} yet. Say the first thing.
+                    {isClipsChannel
+                      ? `No clips shared in #${active?.name} yet. Be the first.`
+                      : `Nothing posted in #${active?.name} yet. Say the first thing.`}
                   </li>
                 )}
               </ul>

@@ -7,6 +7,7 @@ import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { avatarSrc } from "@/lib/avatar-url";
 import type { ClipMessagePayload } from "@/lib/clip-message";
+import { clipPosterSrc, clipVideoSrc } from "@/lib/clip-video-url";
 import { fetchClipFeedPage, type ClipFeedCursor, type FeedClip } from "@/lib/clips";
 import { compactNumber, duration as formatDuration } from "@/lib/format";
 import { notify } from "@/lib/notify";
@@ -134,44 +135,59 @@ export type FinalizeClipUploadFormState =
   | { error?: string; fieldErrors?: Partial<Record<FinalizeClipUploadField, string>> }
   | undefined;
 
+type PreparedClipUpload = {
+  slug: string;
+  title: string;
+  caption?: string;
+  gameId: string | null;
+  durationSec: number;
+  playbackKey: string;
+  thumbnailKey: string | null;
+};
+
+type PrepareClipUploadResult =
+  | { prepared: PreparedClipUpload }
+  | { fieldErrors: Partial<Record<FinalizeClipUploadField, string>> }
+  | { error: string };
+
 /**
- * Step 2, submitted once the browser's direct PUT to R2 has finished. This
- * is the actual "is this really a video" security boundary — everything
- * upstream of it (the client's pre-upload sniff, the contentType it asked
+ * The shared core of "finalize a presigned clip upload" — this is the
+ * actual "is this really a video" security boundary — everything upstream
+ * of it (the client's pre-upload sniff, the contentType it asked
  * requestClipUploadAction to authorize, the Content-Type header it put on
  * the PUT itself) is either a UX nicety or unenforceable, so none of it is
  * trusted here. Instead this reads a small range straight back off the
- * object R2 now holds and sniffs those bytes — a client that skipped the
- * pre-upload check, or swapped the file after it passed, gets caught here,
- * before a Clip row ever ends up pointing at the object.
+ * object R2 now holds and sniffs those bytes, re-derives duration and size
+ * from the real object, and extracts a poster from it — a client that
+ * skipped the pre-upload check, or swapped the file after it passed, gets
+ * caught here, before anything ever gets persisted.
+ *
+ * Used by both finalizeClipUploadAction (the standalone /clips/new flow)
+ * and finalizeChannelClipUploadAction (sharing a fresh upload straight
+ * into a CLIPS channel) — they diverge only in what gets created once this
+ * returns (a bare Clip vs. a Clip + CommunityPost in one transaction), so
+ * this deliberately stops short of any prisma.clip.create call and just
+ * hands back the data for the caller to persist.
  */
-export async function finalizeClipUploadAction(
-  _state: FinalizeClipUploadFormState,
-  formData: FormData,
-): Promise<FinalizeClipUploadFormState> {
-  const user = await getCurrentUser();
-  if (!user) redirect("/login");
-
-  const parsed = finalizeClipUploadSchema.safeParse({
-    title: formData.get("title"),
-    caption: formData.get("caption"),
-    game: formData.get("game"),
-    key: formData.get("key"),
-  });
-  if (!parsed.success) {
-    const issue = parsed.error.issues[0];
-    const field = issue?.path[0];
-    if (field === "title" || field === "caption" || field === "game") {
-      return { fieldErrors: { [field]: issue.message } };
-    }
-    return { error: "That upload is missing its file. Try again." };
-  }
-  const { title, caption, game: gameSlug, key } = parsed.data;
-
+async function prepareClipUpload({
+  userId,
+  title,
+  caption,
+  gameSlug,
+  key,
+  clientDurationSec,
+}: {
+  userId: string;
+  title: string;
+  caption?: string;
+  gameSlug?: string;
+  key: string;
+  clientDurationSec: number;
+}): Promise<PrepareClipUploadResult> {
   // Every key requestClipUploadAction hands out is scoped under the
   // requester's own id — rejects a key that's been tampered with to point
   // at (or guess at) some other user's object.
-  if (!key.startsWith(`clips/${user.id}/`)) {
+  if (!key.startsWith(`clips/${userId}/`)) {
     return { error: "That upload doesn't belong to this session. Try uploading again." };
   }
 
@@ -182,7 +198,6 @@ export async function finalizeClipUploadAction(
   // directly. The clip's actual persisted durationSec, and the duration
   // cap enforced against it, both come from probeVideoDurationSec further
   // down, not this.
-  const clientDurationSec = Math.round(Number(formData.get("durationSec")));
   if (!Number.isFinite(clientDurationSec) || clientDurationSec <= 0) {
     return { error: "Couldn't read that clip's length. Try a different file." };
   }
@@ -225,7 +240,7 @@ export async function finalizeClipUploadAction(
   } catch (error) {
     // Only a genuinely broken ffmpeg install throws (see video-probe.ts's
     // module comment) — an environment problem worth logging loudly.
-    console.error("[finalizeClipUploadAction] duration probe failed to run:", error);
+    console.error("[prepareClipUpload] duration probe failed to run:", error);
   }
   if (durationSec === null || durationSec > MAX_CLIP_DURATION_SEC) {
     await storage.delete(key).catch(() => {});
@@ -257,33 +272,169 @@ export async function finalizeClipUploadAction(
   try {
     const posterBuffer = await extractPosterFrame({ videoUrl, durationSec });
     if (posterBuffer) {
-      thumbnailKey = `clips/${user.id}/${randomUUID()}.jpg`;
+      thumbnailKey = `clips/${userId}/${randomUUID()}.jpg`;
       await storage.put(thumbnailKey, posterBuffer, "image/jpeg");
     }
   } catch (error) {
     // Only a genuinely broken ffmpeg install throws out of
     // extractPosterFrame (see its module comment) — an environment
     // problem worth logging loudly, not a reason to fail this upload.
-    console.error("[finalizeClipUploadAction] poster extraction failed:", error);
+    console.error("[prepareClipUpload] poster extraction failed:", error);
   }
 
   const slug = await uniqueClipSlug(slugifyClipTitle(title));
 
+  return {
+    prepared: { slug, title, caption, gameId, durationSec: Math.round(durationSec), playbackKey: key, thumbnailKey },
+  };
+}
+
+/**
+ * Step 2 of the standalone /clips/new flow, submitted once the browser's
+ * direct PUT to R2 has finished. See prepareClipUpload above for the
+ * actual validation/extraction work — this just persists the bare Clip
+ * row once that's done.
+ */
+export async function finalizeClipUploadAction(
+  _state: FinalizeClipUploadFormState,
+  formData: FormData,
+): Promise<FinalizeClipUploadFormState> {
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+
+  const parsed = finalizeClipUploadSchema.safeParse({
+    title: formData.get("title"),
+    caption: formData.get("caption"),
+    game: formData.get("game"),
+    key: formData.get("key"),
+  });
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const field = issue?.path[0];
+    if (field === "title" || field === "caption" || field === "game") {
+      return { fieldErrors: { [field]: issue.message } };
+    }
+    return { error: "That upload is missing its file. Try again." };
+  }
+  const { title, caption, game: gameSlug, key } = parsed.data;
+  const clientDurationSec = Math.round(Number(formData.get("durationSec")));
+
+  const result = await prepareClipUpload({ userId: user.id, title, caption, gameSlug, key, clientDurationSec });
+  if ("error" in result) return { error: result.error };
+  if ("fieldErrors" in result) return { fieldErrors: result.fieldErrors };
+  const { prepared } = result;
+
   const clip = await prisma.clip.create({
     data: {
-      slug,
+      slug: prepared.slug,
       userId: user.id,
-      gameId,
-      title,
-      caption: caption ?? null,
-      durationSec: Math.round(durationSec),
-      playbackUrl: key,
-      thumbnailUrl: thumbnailKey,
+      gameId: prepared.gameId,
+      title: prepared.title,
+      caption: prepared.caption ?? null,
+      durationSec: prepared.durationSec,
+      playbackUrl: prepared.playbackKey,
+      thumbnailUrl: prepared.thumbnailKey,
     },
   });
 
   revalidatePath("/clips");
   redirect(`/clips/${clip.slug}`);
+}
+
+const finalizeChannelClipUploadSchema = finalizeClipUploadSchema.and(z.object({ channelId: z.string().min(1) }));
+
+export type FinalizeChannelClipUploadFormState =
+  | { error?: string; fieldErrors?: Partial<Record<FinalizeClipUploadField, string>> }
+  | undefined;
+
+/**
+ * Step 2 of the "upload a new clip straight into a CLIPS channel" flow —
+ * the sibling of finalizeClipUploadAction above, reusing the exact same
+ * presigned-upload step (requestClipUploadAction) and the exact same
+ * prepareClipUpload core (sniff, size/duration re-check, poster
+ * extraction), so the 600MB/2-minute limits and the "trust the bytes, not
+ * the request" checks apply identically here. The only real difference is
+ * what gets persisted once that's done: a Clip row exactly like the
+ * standalone flow creates, plus a CommunityPost in the same channel
+ * pointing at it, both in one transaction — so a caller never ends up with
+ * a clip that got uploaded but never made it into the channel, or a
+ * channel post pointing at a clip that doesn't exist.
+ *
+ * Membership and channel-kind are re-checked here, before any upload
+ * processing runs — same "the composer only rendering for a CLIPS-channel
+ * member is a display nicety" stance createCommunityPostAction takes for
+ * text posts, and cheaper to fail on than after ffmpeg has already probed
+ * and extracted a poster from an object nobody's authorized to post here.
+ */
+export async function finalizeChannelClipUploadAction(
+  _state: FinalizeChannelClipUploadFormState,
+  formData: FormData,
+): Promise<FinalizeChannelClipUploadFormState> {
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+
+  const parsed = finalizeChannelClipUploadSchema.safeParse({
+    channelId: formData.get("channelId"),
+    title: formData.get("title"),
+    caption: formData.get("caption"),
+    game: formData.get("game"),
+    key: formData.get("key"),
+  });
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const field = issue?.path[0];
+    if (field === "title" || field === "caption" || field === "game") {
+      return { fieldErrors: { [field]: issue.message } };
+    }
+    return { error: "That upload is missing its file. Try again." };
+  }
+  const { channelId, title, caption, game: gameSlug, key } = parsed.data;
+
+  const channel = await prisma.communityChannel.findUnique({
+    where: { id: channelId },
+    select: {
+      id: true,
+      communityId: true,
+      kind: true,
+      name: true,
+      deletedAt: true,
+      community: { select: { slug: true } },
+    },
+  });
+  if (!channel || channel.deletedAt) return { error: "That channel no longer exists." };
+  if (channel.kind !== "CLIPS") return { error: "That's not a clips channel." };
+
+  const membership = await prisma.communityMember.findUnique({
+    where: { communityId_userId: { communityId: channel.communityId, userId: user.id } },
+  });
+  if (!membership) return { error: "You need to join this community to post." };
+
+  const clientDurationSec = Math.round(Number(formData.get("durationSec")));
+  const result = await prepareClipUpload({ userId: user.id, title, caption, gameSlug, key, clientDurationSec });
+  if ("error" in result) return { error: result.error };
+  if ("fieldErrors" in result) return { fieldErrors: result.fieldErrors };
+  const { prepared } = result;
+
+  await prisma.$transaction(async (tx) => {
+    const clip = await tx.clip.create({
+      data: {
+        slug: prepared.slug,
+        userId: user.id,
+        gameId: prepared.gameId,
+        title: prepared.title,
+        caption: prepared.caption ?? null,
+        durationSec: prepared.durationSec,
+        playbackUrl: prepared.playbackKey,
+        thumbnailUrl: prepared.thumbnailKey,
+      },
+    });
+    await tx.communityPost.create({
+      data: { channelId: channel.id, authorId: user.id, body: prepared.caption ?? "", clipId: clip.id },
+    });
+  });
+
+  revalidatePath("/", "layout");
+  redirect(`/communities/${channel.community.slug}?channel=${channel.name}`);
 }
 
 const deleteClipInput = z.object({ clipId: z.string().min(1) });
@@ -333,6 +484,80 @@ export async function deleteClipAction(clipId: string): Promise<DeleteClipResult
 
   revalidatePath("/", "layout");
   return { deleted: true };
+}
+
+export type ClipDetailPayload = {
+  id: string;
+  userId: string;
+  slug: string;
+  title: string;
+  caption: string | null;
+  displayName: string;
+  username: string;
+  avatarUrl?: string | null;
+  game: string | null;
+  views: number;
+  playbackUrl?: string | null;
+  posterUrl?: string | null;
+  likes: number;
+  saves: number;
+  comments: number;
+  liked: boolean;
+  saved: boolean;
+};
+
+export type GetClipDetailResult = { clip: ClipDetailPayload } | { error: string };
+
+const getClipDetailInput = z.object({ clipId: z.string().min(1) });
+
+/**
+ * Everything ClipDetailView needs for one clip, viewer-scoped (the
+ * liked/saved flags are per-caller, same reaction lookup the standalone
+ * /clips/[slug] page already does). Split out of that page so a second
+ * caller — the clip-viewer modal a CLIPS-channel card opens (see
+ * clip-viewer-modal.tsx) — can fetch the same shape on demand instead of
+ * every channel post paying for a full clip+reaction join up front just in
+ * case someone opens it.
+ */
+export async function getClipDetailAction(clipId: string): Promise<GetClipDetailResult> {
+  const user = await getCurrentUser();
+  if (!user) return { error: "You need to be logged in." };
+
+  const parsed = getClipDetailInput.safeParse({ clipId });
+  if (!parsed.success) return { error: "Invalid clip." };
+
+  const clip = await prisma.clip.findFirst({
+    where: { id: parsed.data.clipId, published: true },
+    include: { user: { include: { profile: true } }, game: true, _count: { select: { comments: true } } },
+  });
+  if (!clip) return { error: "That clip no longer exists." };
+
+  const reaction = await prisma.reaction.findMany({
+    where: { userId: user.id, clipId: clip.id, emote: { in: ["like", "save"] } },
+    select: { emote: true },
+  });
+
+  return {
+    clip: {
+      id: clip.id,
+      userId: clip.userId,
+      slug: clip.slug,
+      title: clip.title,
+      caption: clip.caption,
+      displayName: clip.user.displayName,
+      username: clip.user.username,
+      avatarUrl: avatarSrc(clip.user.profile?.avatarUrl),
+      game: clip.game?.shortName ?? null,
+      views: clip.views,
+      playbackUrl: clipVideoSrc(clip.playbackUrl),
+      posterUrl: clipPosterSrc(clip.thumbnailUrl),
+      likes: clip.likes,
+      saves: clip.saves,
+      comments: clip._count.comments,
+      liked: reaction.some((entry) => entry.emote === "like"),
+      saved: reaction.some((entry) => entry.emote === "save"),
+    },
+  };
 }
 
 // Likes and saves both reuse the generic Reaction model (clipId, userId,

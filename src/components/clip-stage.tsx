@@ -5,8 +5,10 @@ import { useEffect, useRef, useState } from "react";
 import { Bookmark, Flag, Heart, MessageCircle, Pause, Play, Share2, Trash2, UserPlus } from "lucide-react";
 import { Avatar } from "@/components/avatar";
 import { Thumb } from "@/components/cards";
+import { ClipMuteButton } from "@/components/clip-mute-button";
 import { Pill } from "@/components/ui";
 import { recordClipViewAction } from "@/lib/actions/clip";
+import { setClipMuted, useClipMuted } from "@/lib/clip-mute-store";
 import { compactNumber } from "@/lib/format";
 
 // How long a clip has to play, continuously, before it counts as a view —
@@ -46,6 +48,16 @@ const DEFAULT_ASPECT_RATIO = 9 / 16;
 // spaces its icons vertically).
 const RAIL_WIDTH_PX = 48; // w-12
 const VIDEO_RAIL_GAP_PX = 12;
+
+// Same "named number kept in sync with a Tailwind class" reasoning as
+// RAIL_WIDTH_PX above, for the rail's *vertical* sizing this time. Each
+// stacked rail button is a fixed height regardless of which icon or label
+// it holds: a 40px glass icon chip (h-10) + 2px gap (gap-0.5) + one line
+// of tabular count text (~15px) — confirmed against a rendered button's
+// own getBoundingClientRect(), which comes out to exactly this. Buttons
+// are spaced by the rail's own `gap-3`.
+const RAIL_ITEM_HEIGHT_PX = 57;
+const RAIL_ITEM_GAP_PX = 12; // gap-3
 
 // How tall a clip is allowed to get: the viewport's height minus the app
 // chrome around it. Declared as a custom property (rather than used
@@ -166,6 +178,10 @@ export function ClipStage({
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [reducedMotion, setReducedMotion] = useState(false);
+  // Shared across every mounted clip and remembered for the session — see
+  // clip-mute-store.ts. Autoplay only works muted at all, so this starts
+  // true; ClipMuteButton below is the only thing that flips it.
+  const isMuted = useClipMuted();
   // Read off the video's own intrinsic size once metadata loads, so the
   // frame can size the video box to its real aspect ratio instead of
   // guessing. Defaults to a portrait guess until then, which is the
@@ -397,6 +413,14 @@ export function ClipStage({
     ) : null,
   );
 
+  // How tall the rail's own stack of buttons actually needs to be — not
+  // every clip shows all six slots (Delete/Report are mutually exclusive,
+  // onCommentsClick/onShare can be omitted by a caller), so this counts
+  // what actually rendered above rather than assuming a fixed six.
+  const visibleRailCount = railContent.filter(Boolean).length;
+  const railMinHeightPx =
+    visibleRailCount * RAIL_ITEM_HEIGHT_PX + Math.max(0, visibleRailCount - 1) * RAIL_ITEM_GAP_PX;
+
   if (clip.playbackUrl) {
     return (
       // containerRef is a plain w-full block purely so its rendered width
@@ -447,11 +471,16 @@ export function ClipStage({
                 maxWidth: `${effectiveMaxWidthPx - RAIL_WIDTH_PX - VIDEO_RAIL_GAP_PX}px`,
                 maxHeight: "var(--clip-h)",
               }}
-              muted
+              muted={isMuted}
               loop={!reducedMotion}
               playsInline
               preload="metadata"
               controls={reducedMotion}
+              // Reduced-motion (or any other) use of the native controls'
+              // own mute/volume UI still lands here, so it stays in sync
+              // with the shared flag instead of drifting from what
+              // ClipMuteButton shows and what the next clip inherits.
+              onVolumeChange={(event) => setClipMuted(event.currentTarget.muted)}
               // Undefined (not null — React renders a literal "null"
               // attribute otherwise) when there's no poster, e.g. an
               // upload whose client-side frame capture failed; the video
@@ -469,6 +498,8 @@ export function ClipStage({
                 }
               }}
             />
+
+            <ClipMuteButton className="absolute right-2 top-2 z-10" />
 
             {/* Skipped for a reduced-motion video: it renders native
                 controls, and a full-cover invisible button on top would
@@ -508,9 +539,23 @@ export function ClipStage({
 
           {/* The action rail lives outside the video now, not floating on
               top of it — absolutely positioned against this element, so
-              `h-full` matches it to the video's height exactly regardless
-              of the rail's own content height. */}
-          <div className="absolute right-0 top-0 flex h-full w-12 flex-col items-center justify-end gap-3 pb-1">
+              it normally matches the video's height exactly regardless of
+              the rail's own content height. "Normally": pinned at
+              `top-0`, so growing past 100% only extends the box *downward*
+              past the video's bottom edge, into empty space — which is
+              why railMinHeightPx (a floor, not the usual height) is safe
+              here. Without it, a short/landscape video gives the rail too
+              little room for every icon; `justify-end` packs them against
+              the bottom regardless, so the shortfall pushed the topmost
+              button (Like) upward past the video, off the top of this
+              positioned box entirely and behind the page header — visible
+              proof: its count rendered, its icon didn't, because the
+              header's opaque background painted over just the icon half
+              of that button. */}
+          <div
+            className="absolute right-0 top-0 flex w-12 flex-col items-center justify-end gap-3 pb-1"
+            style={{ height: `max(100%, ${railMinHeightPx}px)` }}
+          >
             {railContent}
           </div>
         </div>

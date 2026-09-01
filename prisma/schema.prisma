@@ -426,13 +426,14 @@ model Clip {
   published    Boolean    @default(true)
   createdAt    DateTime   @default(now())
 
-  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  stream    Stream?    @relation(fields: [streamId], references: [id], onDelete: SetNull)
-  vod       VOD?       @relation(fields: [vodId], references: [id], onDelete: SetNull)
-  game      Game?      @relation(fields: [gameId], references: [id])
-  comments  Comment[]
-  reactions Reaction[]
-  viewLog   ClipView[]
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  stream         Stream?         @relation(fields: [streamId], references: [id], onDelete: SetNull)
+  vod            VOD?            @relation(fields: [vodId], references: [id], onDelete: SetNull)
+  game           Game?           @relation(fields: [gameId], references: [id])
+  comments       Comment[]
+  reactions      Reaction[]
+  viewLog        ClipView[]
+  communityPosts CommunityPost[]
 
   @@index([published, createdAt])
   @@index([gameId, views])
@@ -541,7 +542,22 @@ model CommunityPost {
   id          String    @id @default(cuid())
   channelId   String
   authorId    String
+  // For an ordinary post this is the whole message. For a CLIPS-channel
+  // post (see clipId below) it's just the optional caption that goes
+  // alongside the clip card — empty string, not null, when the sharer
+  // left it blank, since the column itself stays non-nullable either way.
   body        String
+  // Set only by a post in a CLIPS-kind channel (see the CLIPS case in
+  // createCommunityPostAction, which rejects that kind outright, and
+  // shareClipToChannelAction / finalizeChannelClipUploadAction, which are
+  // the only writers that ever set this) — null for every other post.
+  // SetNull rather than Cascade: a clip's owner deleting the clip itself
+  // later shouldn't also erase the post's moderation trail (author, body,
+  // deletedAt/deletedById), the same accountability reasoning as this
+  // model's own deletedAt below. The post just renders as a stub with no
+  // clip once that happens — see CommunityPostRow's handling of a null
+  // `clip`.
+  clipId      String?
   pinned      Boolean   @default(false)
   createdAt   DateTime  @default(now())
   // Soft-deleted, not removed: a moderator deleting someone else's post is
@@ -552,8 +568,10 @@ model CommunityPost {
   deletedById String?
 
   channel CommunityChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  clip    Clip?            @relation(fields: [clipId], references: [id], onDelete: SetNull)
 
   @@index([channelId, createdAt])
+  @@index([clipId])
 }
 
 enum CommunityRole {
@@ -1017,19 +1035,19 @@ enum ReportStatus {
 }
 
 model Report {
-  id         String       @id @default(cuid())
-  reporterId String
+  id           String       @id @default(cuid())
+  reporterId   String
   // The user ultimately accountable for what's being reported — the
   // clip's uploader, the post's author, or (when target is USER) the
   // reported user themselves. Set regardless of target, so a moderator
   // can suspend "whoever's responsible for this" without the queue
   // needing target-specific lookup logic just to find them.
-  reportedId String?
-  target     ReportTarget
-  targetId   String
-  reason     String
-  details    String?
-  status     ReportStatus @default(OPEN)
+  reportedId   String?
+  target       ReportTarget
+  targetId     String
+  reason       String
+  details      String?
+  status       ReportStatus @default(OPEN)
   // Who actioned/dismissed this and when — the same "attribute the
   // moderation action, don't just erase the trail" stance as
   // CommunityPost.deletedAt/deletedById above.
@@ -1084,7 +1102,7 @@ enum AdminActionKind {
 // rather than fields on User, since a single account can rack up several
 // of these over time and each one is worth keeping, not just the latest.
 model AdminAction {
-  id         String           @id @default(cuid())
+  id         String          @id @default(cuid())
   userId     String
   actedById  String
   kind       AdminActionKind
@@ -1092,7 +1110,7 @@ model AdminAction {
   toRole     UserRole?
   fromStatus AccountStatus?
   toStatus   AccountStatus?
-  createdAt  DateTime         @default(now())
+  createdAt  DateTime        @default(now())
 
   user    User @relation("adminActionTarget", fields: [userId], references: [id], onDelete: Cascade)
   actedBy User @relation("adminActionActor", fields: [actedById], references: [id], onDelete: Cascade)
