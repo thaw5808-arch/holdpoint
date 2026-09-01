@@ -249,7 +249,14 @@ export default async function TournamentPage({
           />
         ))}
 
-      {tab === "teams" && (
+      {tab === "teams" && tournament.teams.length === 0 && (
+        <p className="border border-dashed border-line p-6 text-center text-sm text-muted">
+          No teams seeded into the bracket yet — that happens once the organizer approves an
+          application and generates it.
+        </p>
+      )}
+
+      {tab === "teams" && tournament.teams.length > 0 && (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {tournament.teams.map((entry) => (
             <Link
@@ -270,7 +277,13 @@ export default async function TournamentPage({
         </div>
       )}
 
-      {tab === "matches" && (
+      {tab === "matches" && tournament.matches.length === 0 && (
+        <p className="border border-dashed border-line p-6 text-center text-sm text-muted">
+          No matches yet — they&rsquo;re created when the bracket is generated.
+        </p>
+      )}
+
+      {tab === "matches" && tournament.matches.length > 0 && (
         <div className="divide-y divide-line border border-line">
           {tournament.matches.map((match) => (
             <div key={match.id} className="flex items-center gap-3 bg-surface px-3 py-2.5 text-sm">

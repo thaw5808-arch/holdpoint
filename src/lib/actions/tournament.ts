@@ -1,11 +1,13 @@
 "use server";
 
+import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import type { Prisma } from "@prisma/client";
 import { generateBracket } from "@/lib/brackets";
 import { notify } from "@/lib/notify";
 import { prisma } from "@/lib/prisma";
+import { REGIONS } from "@/lib/regions";
 import { getCurrentUser } from "@/lib/session";
 
 const MANAGER_ROLES = new Set(["OWNER", "CAPTAIN"]);
@@ -13,6 +15,146 @@ const MANAGER_ROLES = new Set(["OWNER", "CAPTAIN"]);
 /** Internal control-flow error for actions below — caught and turned into
  * a `{ error }` result, never left to surface a raw/leaky message. */
 class ActionError extends Error {}
+
+function slugify(name: string) {
+  const base = name
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return base || "tournament";
+}
+
+/** Appends -2, -3, … until it finds a slug nothing else is using — same
+ * pattern as uniqueSlug in actions/team.ts and uniqueCommunitySlug in
+ * actions/community.ts. */
+async function uniqueTournamentSlug(base: string) {
+  let slug = base;
+  for (let suffix = 2; await prisma.tournament.findUnique({ where: { slug }, select: { id: true } }); suffix++) {
+    slug = `${base}-${suffix}`;
+  }
+  return slug;
+}
+
+const FORMATS = ["SINGLE_ELIMINATION", "DOUBLE_ELIMINATION", "ROUND_ROBIN"] as const;
+
+const createTournamentSchema = z.object({
+  name: z.string().trim().min(3, "Use at least 3 characters").max(60, "Keep it under 60 characters"),
+  game: z.string().trim().min(1, "Pick a game"),
+  format: z.enum(FORMATS),
+  region: z.string().refine((value) => (REGIONS as readonly string[]).includes(value), "Pick a region"),
+  teamSize: z.coerce.number().int().min(1, "At least 1 player per team").max(10, "10 players per team, max"),
+  maxTeams: z.coerce.number().int().min(2, "At least 2 teams").max(64, "64 teams, max"),
+  // Left as the raw datetime-local string here and parsed into a Date below
+  // (rather than z.coerce.date in the schema) so an empty/invalid value
+  // fails with this field's own message instead of zod's generic one.
+  // datetime-local has no timezone of its own — new Date() parses it in
+  // the server's own local time, same as every other plain date input in
+  // this codebase (there's no per-user timezone stored to do better with).
+  startsAt: z.string().min(1, "Pick a start time"),
+  description: z
+    .string()
+    .trim()
+    .min(10, "Say a bit more about the tournament")
+    .max(500, "Keep it under 500 characters"),
+  rules: z
+    .string()
+    .trim()
+    .min(10, "Add at least a few rules")
+    .max(2000, "Keep it under 2000 characters"),
+});
+
+type CreateTournamentField = keyof z.infer<typeof createTournamentSchema>;
+
+export type CreateTournamentFormState =
+  | { error?: string; fieldErrors?: Partial<Record<CreateTournamentField, string>> }
+  | undefined;
+
+/**
+ * Creates a tournament with its creator as organizer — every organizer-only
+ * control on the tournament page (approving registrations, generating the
+ * bracket, confirming results) already checks `organizerId === caller`, so
+ * that's the one relationship this has to get right.
+ *
+ * Fields not exposed on the form get sensible fixed values rather than more
+ * inputs:
+ *   - status starts REGISTRATION_OPEN (the schema's own default) — a
+ *     freshly created tournament should be immediately joinable, not sit in
+ *     DRAFT with no way to leave it (nothing in this codebase transitions a
+ *     tournament out of DRAFT).
+ *   - registrationOpensAt is `now`; registrationClosesAt is `startsAt` —
+ *     registration simply stays open until the event starts, rather than
+ *     asking the organizer to pick two more dates up front. There's no
+ *     tournament-edit action yet, so this can't be tightened later, but
+ *     "open until it starts" is the one default that never needs tuning.
+ *   - prizePool/entryFee are the schema's own 0 defaults, prizeCurrency
+ *     "USD" — this app has no payment flow, so a nonzero entry fee or prize
+ *     would be a promise nothing here can actually collect or pay out.
+ *   - bannerUrl stays null — no image upload wired up for tournaments.
+ */
+export async function createTournamentAction(
+  _state: CreateTournamentFormState,
+  formData: FormData,
+): Promise<CreateTournamentFormState> {
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+
+  const parsed = createTournamentSchema.safeParse({
+    name: formData.get("name"),
+    game: formData.get("game"),
+    format: formData.get("format"),
+    region: formData.get("region"),
+    teamSize: formData.get("teamSize"),
+    maxTeams: formData.get("maxTeams"),
+    startsAt: formData.get("startsAt"),
+    description: formData.get("description"),
+    rules: formData.get("rules"),
+  });
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const field = issue?.path[0];
+    if (typeof field === "string") {
+      return { fieldErrors: { [field as CreateTournamentField]: issue.message } };
+    }
+    return { error: "Check the form and try again." };
+  }
+  const { name, game, format, region, teamSize, maxTeams, description, rules } = parsed.data;
+
+  const startsAt = new Date(parsed.data.startsAt);
+  if (Number.isNaN(startsAt.getTime())) {
+    return { fieldErrors: { startsAt: "Pick a valid start time" } };
+  }
+  if (startsAt.getTime() <= Date.now()) {
+    return { fieldErrors: { startsAt: "Start time can't be in the past" } };
+  }
+
+  const gameRow = await prisma.game.findUnique({ where: { slug: game }, select: { id: true } });
+  if (!gameRow) return { fieldErrors: { game: "Pick a game" } };
+
+  const slug = await uniqueTournamentSlug(slugify(name));
+  const now = new Date();
+
+  const tournament = await prisma.tournament.create({
+    data: {
+      slug,
+      name,
+      organizerId: user.id,
+      gameId: gameRow.id,
+      description,
+      region,
+      format,
+      teamSize,
+      maxTeams,
+      registrationOpensAt: now,
+      registrationClosesAt: startsAt,
+      startsAt,
+      rules,
+    },
+  });
+
+  revalidatePath("/", "layout");
+  redirect(`/tournaments/${tournament.slug}`);
+}
 
 /** A score is valid for a best-of-N match when one side reaches exactly
  * ceil(N/2) wins and the other falls short of it — no ties, no reporting a

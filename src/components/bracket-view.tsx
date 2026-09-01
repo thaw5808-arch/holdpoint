@@ -85,6 +85,24 @@ export function BracketView({
 
   const { points, width, height } = useMemo(() => layout(matches), [matches]);
 
+  // A freshly created tournament has no matches until the organizer
+  // generates a bracket — layout() above still runs (hooks can't be
+  // conditional), but its width/height would otherwise be
+  // Math.max(...[]) + CARD_W + 40 = -Infinity: an empty Map has no points
+  // to take a max of, so a real (if degenerate) number came out negative
+  // infinite, not NaN — the exact kind of thing seeded data, which never
+  // has zero matches, would never have exposed.
+  if (matches.length === 0) {
+    return (
+      <div className="border border-dashed border-line bg-ink px-6 py-16 text-center">
+        <p className="text-sm text-muted">No bracket yet.</p>
+        <p className="mt-1 text-[0.75rem] text-faint">
+          The organizer generates one once at least 2 teams are approved.
+        </p>
+      </div>
+    );
+  }
+
   const connectors = matches
     .filter((match) => match.winnerNextId && points.has(match.winnerNextId))
     .map((match) => {
