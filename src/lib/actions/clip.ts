@@ -9,6 +9,7 @@ import { avatarSrc } from "@/lib/avatar-url";
 import type { ClipMessagePayload } from "@/lib/clip-message";
 import { clipPosterSrc, clipVideoSrc } from "@/lib/clip-video-url";
 import { fetchClipFeedPage, type ClipFeedCursor, type FeedClip } from "@/lib/clips";
+import { findOrCreateDirectConversation, usersCanMessage } from "@/lib/conversations";
 import { compactNumber, duration as formatDuration } from "@/lib/format";
 import { notify } from "@/lib/notify";
 import { extractPosterFrame } from "@/lib/poster";
@@ -951,16 +952,11 @@ export async function sendClipToUserAction(clipId: string, recipientId: string):
   // The sheet only ever lists people reachable this way, but that's a
   // display convenience — re-checked here so a direct call can't spam an
   // arbitrary stranger who has no relationship with the sender at all.
-  const reachable = await prisma.follow.findFirst({
-    where: {
-      OR: [
-        { followerId: user.id, followedId: recipient.id },
-        { followerId: recipient.id, followedId: user.id },
-      ],
-    },
-    select: { id: true },
-  });
-  if (!reachable) return { error: "You can only send clips to people you follow or who follow you." };
+  // Shared with startConversationAction (actions/message.ts) so the two
+  // entry points can't disagree about who's reachable.
+  if (!(await usersCanMessage(user.id, recipient.id))) {
+    return { error: "You can only send clips to people you follow or who follow you." };
+  }
 
   const payload: ClipMessagePayload = {
     clipId: clip.id,
@@ -970,19 +966,7 @@ export async function sendClipToUserAction(clipId: string, recipientId: string):
   };
 
   await prisma.$transaction(async (tx) => {
-    let conversation = await tx.conversation.findFirst({
-      where: {
-        isGroup: false,
-        AND: [{ members: { some: { userId: user.id } } }, { members: { some: { userId: recipient.id } } }],
-      },
-      include: { members: true },
-    });
-    if (!conversation || conversation.members.length !== 2) {
-      conversation = await tx.conversation.create({
-        data: { isGroup: false, members: { create: [{ userId: user.id }, { userId: recipient.id }] } },
-        include: { members: true },
-      });
-    }
+    const conversation = await findOrCreateDirectConversation(tx, user.id, recipient.id);
 
     await tx.message.create({
       data: {
@@ -993,6 +977,7 @@ export async function sendClipToUserAction(clipId: string, recipientId: string):
         payload,
       },
     });
+    await tx.conversation.update({ where: { id: conversation.id }, data: { updatedAt: new Date() } });
 
     await tx.notification.create({
       data: {
@@ -1000,7 +985,9 @@ export async function sendClipToUserAction(clipId: string, recipientId: string):
         kind: "CLIP_SHARED",
         title: `${user.displayName} sent you a clip`,
         body: clip.title,
-        href: "/messages",
+        // Now that a thread view exists, point straight at it rather than
+        // the bare list — same reasoning as sendMessageAction's own href.
+        href: `/messages/${conversation.id}`,
       },
     });
   });
