@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import {
   Bell,
   Film,
@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { Avatar } from "@/components/avatar";
 import { Wordmark } from "@/components/brand";
+import { markAllNotificationsReadAction } from "@/lib/actions/notifications";
 
 export interface SearchSuggestion {
   kind: "Creator" | "Game" | "Team" | "Community" | "Tournament";
@@ -71,11 +72,27 @@ export function Topbar({
   const [open, setOpen] = useState<"search" | "bell" | "create" | "me" | null>(null);
   const [query, setQuery] = useState("");
   const ref = useDismiss(() => setOpen(null));
+  // Seeded once from the server prop, then owned locally — same
+  // "optimistic, seed once" approach as FollowButton — so opening the
+  // bell clears the badge immediately instead of waiting on the next
+  // navigation to re-fetch AppLayout's notificationFeed.
+  const [items, setItems] = useState(notifications);
+  const [, startMarkReadTransition] = useTransition();
 
   const filtered = query
     ? suggestions.filter((item) => item.label.toLowerCase().includes(query.toLowerCase())).slice(0, 7)
     : suggestions.slice(0, 5);
-  const unread = notifications.filter((item) => item.unread).length;
+  const unread = items.filter((item) => item.unread).length;
+
+  const openBell = () => {
+    const opening = open !== "bell";
+    setOpen(opening ? "bell" : null);
+    if (!opening || unread === 0) return;
+    setItems((current) => current.map((item) => ({ ...item, unread: false })));
+    startMarkReadTransition(async () => {
+      await markAllNotificationsReadAction();
+    });
+  };
 
   return (
     <header
@@ -137,7 +154,7 @@ export function Topbar({
             type="button"
             className="btn btn-ghost relative px-2"
             aria-label={`Notifications, ${unread} unread`}
-            onClick={() => setOpen(open === "bell" ? null : "bell")}
+            onClick={openBell}
           >
             <Bell size={17} />
             {unread > 0 && (
@@ -152,13 +169,13 @@ export function Topbar({
                   See all
                 </Link>
               </div>
-              {notifications.length === 0 ? (
+              {items.length === 0 ? (
                 <p className="px-3 pb-4 pt-1 text-sm text-muted">
                   Nothing yet. Follow a creator and you&rsquo;ll hear when they go live.
                 </p>
               ) : (
                 <ul className="max-h-[60vh] overflow-y-auto">
-                  {notifications.slice(0, 6).map((item) => (
+                  {items.slice(0, 6).map((item) => (
                     <li key={item.id}>
                       <Link
                         href={item.href}

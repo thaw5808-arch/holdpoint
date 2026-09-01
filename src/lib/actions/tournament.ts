@@ -795,3 +795,44 @@ export async function confirmMatchResultAction(
     throw error;
   }
 }
+
+const streamUrlInput = z.object({
+  matchId: z.string().min(1),
+  streamUrl: z.string().trim().max(300),
+});
+
+export type SetMatchStreamUrlResult = { streamUrl: string | null } | { error: string };
+
+/**
+ * Sets (or clears, on an empty string) the external stream link an
+ * organizer points "Watch this match" at — organizer-only, re-checked
+ * here against the match's own tournament rather than trusted from the
+ * client, the same as every other organizer-gated action in this file.
+ */
+export async function setMatchStreamUrlAction(matchId: string, streamUrl: string): Promise<SetMatchStreamUrlResult> {
+  const user = await getCurrentUser();
+  if (!user) return { error: "You need to be logged in." };
+
+  const parsed = streamUrlInput.safeParse({ matchId, streamUrl });
+  if (!parsed.success) return { error: "Invalid input." };
+
+  const match = await prisma.tournamentMatch.findUnique({
+    where: { id: parsed.data.matchId },
+    select: { id: true, tournament: { select: { organizerId: true } } },
+  });
+  if (!match) return { error: "That match no longer exists." };
+  if (match.tournament.organizerId !== user.id) {
+    return { error: "Only the tournament organizer can set a stream link." };
+  }
+
+  let normalized: string | null = null;
+  if (parsed.data.streamUrl) {
+    const url = z.string().url("Enter a valid URL.").safeParse(parsed.data.streamUrl);
+    if (!url.success) return { error: url.error.issues[0]?.message ?? "Enter a valid URL." };
+    normalized = url.data;
+  }
+
+  await prisma.tournamentMatch.update({ where: { id: match.id }, data: { streamUrl: normalized } });
+  revalidatePath("/", "layout");
+  return { streamUrl: normalized };
+}

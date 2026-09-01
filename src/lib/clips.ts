@@ -25,6 +25,12 @@ export interface FeedClip {
   comments: number;
   liked: boolean;
   saved: boolean;
+  /** Does the viewer already follow this clip's uploader. */
+  following: boolean;
+  /** Does this clip's uploader already follow the viewer back — only
+   * changes the follow button's label ("Follow" vs "Follow back"), see
+   * followLabel in follow-button.tsx. */
+  followsViewer: boolean;
 }
 
 /** Seek-pagination cursor: the (views, createdAt, id) of the last clip
@@ -99,6 +105,29 @@ export async function fetchClipFeedPage({
     viewerReactions.filter((reaction) => reaction.emote === "save").map((reaction) => reaction.clipId),
   );
 
+  // Follow state for every uploader in this batch, in one query covering
+  // both directions at once (rather than one query per clip, or even one
+  // query per direction) — partitioned below by which side of the row the
+  // viewer is on. A clip the viewer uploaded themselves has no Follow row
+  // either way (self-follow is rejected at the action level), so it just
+  // falls out of both sets naturally.
+  const uploaderIds = [...new Set(rows.map((clip) => clip.userId))];
+  const followRows = await prisma.follow.findMany({
+    where: {
+      OR: [
+        { followerId: viewerId, followedId: { in: uploaderIds } },
+        { followerId: { in: uploaderIds }, followedId: viewerId },
+      ],
+    },
+    select: { followerId: true, followedId: true },
+  });
+  const followingIds = new Set(
+    followRows.filter((row) => row.followerId === viewerId).map((row) => row.followedId),
+  );
+  const followedByIds = new Set(
+    followRows.filter((row) => row.followedId === viewerId).map((row) => row.followerId),
+  );
+
   const clips = rows.map((clip) => ({
     id: clip.id,
     userId: clip.userId,
@@ -117,6 +146,8 @@ export async function fetchClipFeedPage({
     comments: clip._count.comments,
     liked: likedClipIds.has(clip.id),
     saved: savedClipIds.has(clip.id),
+    following: followingIds.has(clip.userId),
+    followsViewer: followedByIds.has(clip.userId),
   }));
 
   // A partial batch (fewer rows than asked for) means the table's

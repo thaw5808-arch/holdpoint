@@ -1,9 +1,10 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
-import { Minus, Plus, Crosshair } from "lucide-react";
+import { ExternalLink, Minus, Plus, Crosshair } from "lucide-react";
 import { Emblem } from "@/components/emblem";
 import { MatchResultActions } from "@/components/match-result-actions";
+import { MatchStreamUrlForm } from "@/components/match-stream-url-form";
 
 export interface BracketMatch {
   id: string;
@@ -21,6 +22,9 @@ export interface BracketMatch {
   /** userId of whoever reported the pending result, if any — lets the
    * panel tell the reporter apart from the team waiting to respond. */
   resultReportedById: string | null;
+  /** External link "Watch this match" opens, set by the organizer via
+   * MatchStreamUrlForm below. null until they set one. */
+  streamUrl: string | null;
 }
 
 const CARD_W = 208;
@@ -68,10 +72,15 @@ export function BracketView({
   matches,
   viewerId = null,
   viewerTeamIds = [],
+  isOrganizer = false,
 }: {
   matches: BracketMatch[];
   viewerId?: string | null;
   viewerTeamIds?: string[];
+  /** Gates MatchStreamUrlForm's visibility — setMatchStreamUrlAction
+   * re-derives this itself from the DB, so this only controls whether the
+   * control renders, never whether a save actually goes through. */
+  isOrganizer?: boolean;
 }) {
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -266,9 +275,18 @@ export function BracketView({
               {new Date(active.scheduledAt).toLocaleString()}
             </p>
           )}
-          {active.state === "LIVE" && (
-            <button className="btn btn-primary mt-4 w-full">Watch this match</button>
+          {active.state === "LIVE" && active.streamUrl && (
+            <a
+              href={active.streamUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="btn btn-primary mt-4 flex w-full items-center justify-center gap-1.5"
+            >
+              <ExternalLink size={14} /> Watch this match
+            </a>
           )}
+
+          {isOrganizer && <MatchStreamUrlForm matchId={active.id} initialUrl={active.streamUrl} />}
 
           <MatchResultActions
             matchId={active.id}

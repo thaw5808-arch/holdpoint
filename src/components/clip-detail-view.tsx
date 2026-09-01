@@ -11,6 +11,7 @@ import { ClipStage, type ClipStageClip } from "@/components/clip-stage";
 import { ReportDialog } from "@/components/report-dialog";
 import { SectionHeader } from "@/components/ui";
 import { toggleClipLikeAction, toggleClipSaveAction } from "@/lib/actions/clip";
+import { toggleFollowAction } from "@/lib/actions/follow";
 
 export interface DetailClip extends ClipStageClip {
   id: string;
@@ -20,6 +21,8 @@ export interface DetailClip extends ClipStageClip {
   comments: number;
   liked: boolean;
   saved: boolean;
+  following: boolean;
+  followsViewer: boolean;
 }
 
 /**
@@ -44,6 +47,7 @@ export function ClipDetailView({
   const router = useRouter();
   const [reaction, setReaction] = useState({ liked: clip.liked, likes: clip.likes, saved: clip.saved, saves: clip.saves });
   const [commentCount, setCommentCount] = useState(clip.comments);
+  const [follow, setFollow] = useState({ following: clip.following, followsViewer: clip.followsViewer });
   const [shareOpen, setShareOpen] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [reportDialogOpen, setReportDialogOpen] = useState(false);
@@ -68,6 +72,15 @@ export function ClipDetailView({
     });
   };
 
+  const toggleFollow = () => {
+    const previous = follow;
+    setFollow((state) => ({ ...state, following: !state.following }));
+    startTransition(async () => {
+      const result = await toggleFollowAction(clip.userId);
+      setFollow((state) => ("error" in result ? previous : { ...state, following: result.following }));
+    });
+  };
+
   return (
     <div className="mx-auto max-w-[1400px] px-3 py-5 sm:px-5">
       <Link href="/clips" className="btn btn-ghost mb-5">
@@ -80,6 +93,9 @@ export function ClipDetailView({
             clip={clip}
             maxWidthPx={380}
             isOwnClip={isOwnClip}
+            following={follow.following}
+            followsViewer={follow.followsViewer}
+            onToggleFollow={toggleFollow}
             reaction={reaction}
             commentCount={commentCount}
             onToggleLike={toggleLike}

@@ -80,9 +80,14 @@ export default async function TeamPage({ params }: { params: Promise<{ slug: str
           <LeaveTeamButton teamId={team.id} />
         ) : pendingInvite ? (
           <RespondToTeamInviteButtons inviteId={pendingInvite.id} />
-        ) : (
-          <button className="btn btn-primary">Apply to roster</button>
-        )}
+        ) : null}
+        {/* Anyone else — a non-member with no pending invite, or a logged-out
+            visitor — gets no button here. There used to be a static "Apply
+            to roster" that went nowhere: no application model, no owner-side
+            review queue, nothing a click could actually do. Joining a
+            roster is owner-initiated (invite → accept) until a real
+            apply-and-review flow exists to mirror it in the other
+            direction; an honest absence beats a button that lies. */}
       </header>
 
       <div className="mb-8 grid grid-cols-2 gap-3 sm:grid-cols-4">

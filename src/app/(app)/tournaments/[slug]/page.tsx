@@ -135,7 +135,13 @@ export default async function TournamentPage({
               Log in to register
             </Link>
           )}
-          <button className="btn">Follow</button>
+          {/* There used to be a static "Follow" button here with nothing
+              behind it — no TournamentFollow model, and TOURNAMENT_REMINDER
+              (the notification kind it'd presumably send) has no sender
+              anywhere in the app; there's no job/cron layer at all to run
+              one. That's a real feature (model + migration + a scheduler),
+              not a wiring fix, so it's left off rather than shipped as a
+              button that does nothing. */}
         </div>
       </header>
 
@@ -227,6 +233,7 @@ export default async function TournamentPage({
           <BracketView
             viewerId={user?.id ?? null}
             viewerTeamIds={viewerTeamIds}
+            isOrganizer={isOrganizer}
             matches={tournament.matches.map((match) => ({
               id: match.id,
               side: match.side,
@@ -239,6 +246,7 @@ export default async function TournamentPage({
               winnerNextId: match.winnerNextId,
               scheduledAt: match.scheduledAt?.toISOString() ?? null,
               resultReportedById: match.result?.reportedById ?? null,
+              streamUrl: match.streamUrl,
               home: match.homeTeam
                 ? { id: match.homeTeam.id, name: match.homeTeam.name, tag: match.homeTeam.tag, slug: match.homeTeam.slug }
                 : null,

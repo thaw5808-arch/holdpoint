@@ -67,6 +67,20 @@ export default async function ClipPage({ params }: { params: Promise<{ slug: str
   const liked = reaction.some((entry) => entry.emote === "like");
   const saved = reaction.some((entry) => entry.emote === "save");
 
+  // Skipped entirely for your own clip — self-follow is rejected at the
+  // action level anyway, and isOwnClip already hides the button.
+  const isOwnClip = clip.userId === user.id;
+  const [followingRow, followedByRow] = isOwnClip
+    ? [null, null]
+    : await Promise.all([
+        prisma.follow.findUnique({
+          where: { followerId_followedId: { followerId: user.id, followedId: clip.userId } },
+        }),
+        prisma.follow.findUnique({
+          where: { followerId_followedId: { followerId: clip.userId, followedId: user.id } },
+        }),
+      ]);
+
   return (
     <ClipDetailView
       viewerId={user.id}
@@ -88,6 +102,8 @@ export default async function ClipPage({ params }: { params: Promise<{ slug: str
         comments: clip._count.comments,
         liked,
         saved,
+        following: Boolean(followingRow),
+        followsViewer: Boolean(followedByRow),
       }}
     />
   );

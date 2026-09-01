@@ -2,10 +2,11 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { Bookmark, Flag, Heart, MessageCircle, Pause, Play, Share2, Trash2, UserPlus } from "lucide-react";
+import { Bookmark, Flag, Heart, MessageCircle, Pause, Play, Share2, Trash2, UserCheck, UserPlus } from "lucide-react";
 import { Avatar } from "@/components/avatar";
 import { Thumb } from "@/components/cards";
 import { ClipMuteButton } from "@/components/clip-mute-button";
+import { followLabel } from "@/components/follow-button";
 import { Pill } from "@/components/ui";
 import { recordClipViewAction } from "@/lib/actions/clip";
 import { setClipMuted, useClipMuted } from "@/lib/clip-mute-store";
@@ -115,6 +116,9 @@ export function ClipStage({
   shareActive = false,
   onActivate,
   isOwnClip = false,
+  following = false,
+  followsViewer = false,
+  onToggleFollow,
   onDelete,
   deleteActive = false,
   onReport,
@@ -158,6 +162,18 @@ export function ClipStage({
    * the "Follow creator" button below the same way a profile hides its
    * own follow button, since following yourself isn't a real action. */
   isOwnClip?: boolean;
+  /** Does the viewer already follow this clip's uploader — same
+   * optimistic-with-rollback ownership as reaction/commentCount: the
+   * caller owns the state (seeded from FeedClip/DetailClip, keyed by
+   * uploader so every clip from the same creator agrees), this just
+   * renders it. Ignored when isOwnClip. */
+  following?: boolean;
+  /** Does this clip's uploader already follow the viewer back — only
+   * changes the button's label, see followLabel in follow-button.tsx. */
+  followsViewer?: boolean;
+  /** Toggles the follow above. Omitted only when isOwnClip, the same as
+   * onDelete/onReport are conditionally omitted below. */
+  onToggleFollow?: () => void;
   /** Opens the delete-confirm dialog. Only ever passed by a caller when
    * isOwnClip is true — the rail's delete icon is omitted entirely
    * otherwise, and deleteClipAction re-checks ownership regardless. */
@@ -341,8 +357,13 @@ export function ClipStage({
           {clip.displayName}
         </Link>
         {!isOwnClip && (
-          <button className="btn btn-ghost pointer-events-auto ml-auto px-1.5" aria-label="Follow creator">
-            <UserPlus size={15} />
+          <button
+            className="btn btn-ghost pointer-events-auto ml-auto px-1.5"
+            aria-label={followLabel(following, followsViewer)}
+            aria-pressed={following}
+            onClick={onToggleFollow}
+          >
+            {following ? <UserCheck size={15} /> : <UserPlus size={15} />}
           </button>
         )}
       </div>

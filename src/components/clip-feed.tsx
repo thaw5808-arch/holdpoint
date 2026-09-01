@@ -9,11 +9,13 @@ import { ClipStage } from "@/components/clip-stage";
 import { ReportDialog } from "@/components/report-dialog";
 import { EmptyState } from "@/components/ui";
 import { loadMoreClipsAction, toggleClipLikeAction, toggleClipSaveAction } from "@/lib/actions/clip";
+import { toggleFollowAction } from "@/lib/actions/follow";
 import type { ClipFeedCursor, FeedClip } from "@/lib/clips";
 
 export type { FeedClip };
 
 type ReactionState = { liked: boolean; likes: number; saved: boolean; saves: number };
+type FollowState = { following: boolean; followsViewer: boolean };
 
 // How close to the end of what's already loaded the active clip has to be
 // before the next batch is fetched — small enough that it's not firing on
@@ -138,6 +140,16 @@ export function ClipFeed({
   const [commentCounts, setCommentCounts] = useState<Record<string, number>>(() =>
     Object.fromEntries(clips.map((clip) => [clip.id, clip.comments])),
   );
+  // Keyed by uploader id, not clip id — same seed-once-then-own-it
+  // approach as reactions/commentCounts above, but a creator can have
+  // several clips in the same feed and toggling follow on one should read
+  // as followed everywhere else they show up too, not just on the card
+  // that was clicked.
+  const [followState, setFollowState] = useState<Record<string, FollowState>>(() =>
+    Object.fromEntries(
+      clips.map((clip) => [clip.userId, { following: clip.following, followsViewer: clip.followsViewer }]),
+    ),
+  );
 
   // Fetches the next batch once the active clip — the same signal the
   // autoplay observer above produces, not a separate scroll listener —
@@ -180,6 +192,17 @@ export function ClipFeed({
       setCommentCounts((state) => {
         const additions = Object.fromEntries(
           result.clips.filter((clip) => !(clip.id in state)).map((clip) => [clip.id, clip.comments]),
+        );
+        return { ...state, ...additions };
+      });
+      setFollowState((state) => {
+        // Keyed by uploader, not clip — a creator already seen earlier in
+        // the feed keeps whatever follow state's already been toggled
+        // locally rather than getting reset from this batch's snapshot.
+        const additions = Object.fromEntries(
+          result.clips
+            .filter((clip) => !(clip.userId in state))
+            .map((clip) => [clip.userId, { following: clip.following, followsViewer: clip.followsViewer }]),
         );
         return { ...state, ...additions };
       });
@@ -242,6 +265,18 @@ export function ClipFeed({
     });
   };
 
+  const toggleFollow = (ownerId: string) => {
+    const previous = followState[ownerId];
+    setFollowState((state) => ({ ...state, [ownerId]: { ...previous, following: !previous.following } }));
+    startTransition(async () => {
+      const result = await toggleFollowAction(ownerId);
+      setFollowState((state) => ({
+        ...state,
+        [ownerId]: "error" in result ? previous : { ...state[ownerId], following: result.following },
+      }));
+    });
+  };
+
   // Drops a deleted clip out of the feed. Doesn't touch activeClipId even
   // when the deleted clip was the active one — see the observer effect's
   // comment above for why that's deliberately left to it rather than set
@@ -296,6 +331,9 @@ export function ClipFeed({
                 isActive={clip.id === activeClipId}
                 onActivate={() => scrollToClip(clip.id)}
                 isOwnClip={clip.userId === viewerId}
+                following={followState[clip.userId]?.following ?? false}
+                followsViewer={followState[clip.userId]?.followsViewer ?? false}
+                onToggleFollow={() => toggleFollow(clip.userId)}
                 reaction={reaction}
                 commentCount={commentCount}
                 onToggleLike={() => toggleLike(clip.id)}
