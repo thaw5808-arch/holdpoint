@@ -2,15 +2,12 @@
 
 import { redirect } from "next/navigation";
 import { z } from "zod";
+import { gameRankOps, playerPreferenceOps, setupFieldsSchema } from "@/lib/player-setup";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/session";
 
-const schema = z.object({
+const schema = setupFieldsSchema.extend({
   games: z.array(z.string()).min(1, "Pick at least one game"),
-  region: z.string().min(2),
-  languages: z.array(z.string()).min(1),
-  platforms: z.array(z.string()).min(1),
-  goals: z.array(z.string()).min(1, "Pick at least one goal"),
 });
 
 export type OnboardingState = { error?: string } | undefined;
@@ -36,37 +33,9 @@ export async function completeOnboarding(
   const games = await prisma.game.findMany({ where: { slug: { in: parsed.data.games } } });
 
   await prisma.$transaction([
-    prisma.playerPreference.upsert({
-      where: { userId: user.id },
-      create: {
-        userId: user.id,
-        region: parsed.data.region,
-        languages: parsed.data.languages,
-        platforms: parsed.data.platforms,
-        goals: parsed.data.goals,
-        activeHours: [19, 20, 21, 22],
-        preferredRoles: [],
-      },
-      update: {
-        region: parsed.data.region,
-        languages: parsed.data.languages,
-        platforms: parsed.data.platforms,
-        goals: parsed.data.goals,
-      },
-    }),
-    prisma.profile.upsert({
-      where: { userId: user.id },
-      create: { userId: user.id, region: parsed.data.region, languages: parsed.data.languages },
-      update: { region: parsed.data.region, languages: parsed.data.languages },
-    }),
+    ...playerPreferenceOps(user.id, parsed.data),
     // A followed game with no rank yet still personalises the feed.
-    ...games.map((game) =>
-      prisma.gameRank.upsert({
-        where: { userId_gameId: { userId: user.id, gameId: game.id } },
-        create: { userId: user.id, gameId: game.id, tier: game.rankTiers[0], tierIdx: 0 },
-        update: {},
-      }),
-    ),
+    ...gameRankOps(user.id, games),
     prisma.user.update({ where: { id: user.id }, data: { onboardedAt: new Date() } }),
   ]);
 
