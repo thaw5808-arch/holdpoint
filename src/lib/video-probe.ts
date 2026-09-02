@@ -1,6 +1,5 @@
 import { spawn } from "child_process";
-import { existsSync } from "fs";
-import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
+import { ffmpegPath } from "@/lib/ffmpeg";
 
 // Same reasoning as poster.ts's own timeout: a stalled network read against
 // R2 shouldn't hang a clip upload indefinitely. ffmpeg only needs to reach
@@ -8,21 +7,6 @@ import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
 // normally fast — the timeout exists for the unusual case, not the typical
 // one.
 const FFMPEG_TIMEOUT_MS = 15_000;
-
-function ffmpegPath(): string {
-  const path = ffmpegInstaller.path;
-  if (!existsSync(path)) {
-    // Same "environment problem, not a clip problem" stance as poster.ts —
-    // loud and specific here, callers decide how to treat it.
-    throw new Error(
-      `ffmpeg binary not found at ${path} (from @ffmpeg-installer/ffmpeg). ` +
-        `Duration probing can't run without it — check that this platform ` +
-        `(${process.platform}/${process.arch}) has a build, or that ` +
-        `node_modules actually installed it.`,
-    );
-  }
-  return path;
-}
 
 // ffmpeg prints a line like "Duration: 00:01:23.45, start: 0.000000, ..."
 // to stderr while it opens the input, regardless of whether an output was

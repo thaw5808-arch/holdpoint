@@ -1,7 +1,6 @@
 import { spawn } from "child_process";
-import { existsSync } from "fs";
-import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
 import sharp from "sharp";
+import { ffmpegPath } from "@/lib/ffmpeg";
 
 // Plenty for a feed card or a <video poster>, nowhere near source
 // resolution — matches the width the client-side capture used to export.
@@ -15,24 +14,6 @@ const FFMPEG_TIMEOUT_MS = 15_000;
 // Same target as the old client-side capture: ~1s in, or earlier for a
 // clip shorter than 2s. See seekCandidates for the retry timestamps.
 const PRIMARY_SEEK_SECONDS = 1;
-
-function ffmpegPath(): string {
-  const path = ffmpegInstaller.path;
-  if (!existsSync(path)) {
-    // A missing binary here means the environment, not the clip — loud
-    // and specific on purpose (see the module-level comment) rather than
-    // silently falling back to something else. Callers still catch this
-    // and store no poster rather than fail the whole upload, but it's
-    // logged, never swallowed without a trace.
-    throw new Error(
-      `ffmpeg binary not found at ${path} (from @ffmpeg-installer/ffmpeg). ` +
-        `Poster extraction can't run without it — check that this platform ` +
-        `(${process.platform}/${process.arch}) has a build, or that ` +
-        `node_modules actually installed it.`,
-    );
-  }
-  return path;
-}
 
 /**
  * Timestamps (seconds) to try in order. The primary target mirrors the

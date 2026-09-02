@@ -10,6 +10,7 @@ import {
   Scissors,
   Settings,
   Tv,
+  VideoOff,
   Volume2,
   VolumeX,
 } from "lucide-react";
@@ -18,6 +19,17 @@ import { LiveTag } from "@/components/ui";
 
 const QUALITIES = ["Source", "1080p60", "720p60", "480p", "160p"];
 
+/**
+ * WatchView's video surface — deliberately still a shell: a generated
+ * thumbnail plus a fully cosmetic controls bar (play/pause, volume,
+ * quality, latency, theater, fullscreen all just flip local state, none
+ * of it wired to an actual `<video>` element or an ingest pipeline). Kept
+ * that way rather than ripped out, since the rest of the watch page
+ * already assumes a player-shaped element sits here — but a genuinely
+ * live stream now says as much in the middle of the frame (see the `live`
+ * block below) instead of silently pretending the controls play something
+ * real.
+ */
 export function StreamPlayer({
   seed,
   game,
@@ -44,6 +56,21 @@ export function StreamPlayer({
       {live && (
         <div className="absolute left-3 top-3">
           <LiveTag />
+        </div>
+      )}
+
+      {/* This is a cosmetic shell — there's no ingest/playback pipeline
+          behind it (see the module comment below), so a genuinely live
+          stream has to say that plainly rather than let the play/pause
+          controls imply real video is actually rolling. Not gated behind
+          hover like the controls bar: this is the one honest thing about
+          the player, so it stays visible the whole time. */}
+      {live && (
+        <div className="pointer-events-none absolute inset-x-3 top-1/2 flex -translate-y-1/2 justify-center">
+          <span className="glass flex items-center gap-1.5 px-3 py-1.5 text-center text-[0.75rem] text-muted">
+            <VideoOff size={13} className="shrink-0" />
+            No live video yet — this is a preview player, not a real feed
+          </span>
         </div>
       )}
 

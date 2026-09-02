@@ -34,3 +34,26 @@ export async function notify(data: {
     console.error(`[notify:${data.kind}] failed to notify user ${data.userId}:`, error);
   });
 }
+
+/**
+ * Fan-out variant of notify() above, for an event with many recipients at
+ * once — currently just goLiveAction telling every follower of a channel
+ * that just went live (lib/actions/stream.ts). Same never-fails-the-caller
+ * contract (a write that fails only ever gets logged, never thrown), but
+ * one bulk insert instead of one round-trip per recipient: a popular
+ * channel can have thousands of followers, and looping notify() over each
+ * one would put that many sequential DB writes on the hot path of an
+ * action whose actual job — flipping Stream.isLive — has nothing to do
+ * with how many people end up getting told about it.
+ */
+export async function notifyMany(
+  userIds: string[],
+  data: { kind: NotificationKind; title: string; body: string; href: string },
+): Promise<void> {
+  if (userIds.length === 0) return;
+  await prisma.notification
+    .createMany({ data: userIds.map((userId) => ({ userId, ...data })) })
+    .catch((error) => {
+      console.error(`[notify:${data.kind}] fan-out to ${userIds.length} users failed:`, error);
+    });
+}

@@ -19,6 +19,24 @@ export function duration(seconds: number) {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
+/** Discord-style date-divider label — "Today" / "Yesterday" / a full date,
+ * compared by local calendar day rather than a 24h rolling window (so
+ * 11:58pm and 12:02am the same night fall on different days, matching how
+ * people actually read a divider). Used to break up a channel's post list
+ * (see CommunityChannelFeed), not a running "2h ago" style timestamp — that
+ * stays relativeTime above. */
+export function dayDivider(date: Date, now = new Date()) {
+  const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const diffDays = Math.round((startOfDay(now) - startOfDay(date)) / 86_400_000);
+  if (diffDays === 0) return "Today";
+  if (diffDays === 1) return "Yesterday";
+  return date.toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+    year: date.getFullYear() === now.getFullYear() ? undefined : "numeric",
+  });
+}
+
 export function relativeTime(date: Date, now = new Date()) {
   const diff = Math.round((date.getTime() - now.getTime()) / 1000);
   const units: [Intl.RelativeTimeFormatUnit, number][] = [

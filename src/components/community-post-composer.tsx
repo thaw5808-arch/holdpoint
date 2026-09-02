@@ -26,7 +26,7 @@ export function CommunityPostComposer({
 
   if (!canPostHere) {
     return (
-      <p className="mb-3 border border-dashed border-line px-3 py-2.5 text-sm text-muted">
+      <p className="border-t border-dashed border-line px-3 py-2.5 text-sm text-muted">
         Only moderators can post in #{channelName}.
       </p>
     );
@@ -48,7 +48,7 @@ export function CommunityPostComposer({
 
   return (
     <form
-      className="mb-3 border border-line bg-surface p-2.5"
+      className="border-t border-line bg-surface p-2.5"
       onSubmit={(event) => {
         event.preventDefault();
         submit();
@@ -88,7 +88,7 @@ export function CommunityPostComposer({
 /** Non-member view: a prompt to join instead of a composer. */
 export function JoinToPostPrompt({ communityId }: { communityId: string }) {
   return (
-    <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border border-dashed border-line px-3 py-2.5 text-sm text-muted">
+    <div className="flex flex-wrap items-center justify-between gap-2 border-t border-dashed border-line px-3 py-2.5 text-sm text-muted">
       <span>Join this community to post here.</span>
       <JoinCommunityButton communityId={communityId} joined={false} />
     </div>

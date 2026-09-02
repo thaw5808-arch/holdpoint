@@ -30,10 +30,15 @@ export interface CommunityPostClipData {
 
 export interface CommunityPostRowData {
   id: string;
+  authorId: string;
   body: string;
   clip: CommunityPostClipData | null | undefined;
   pinned: boolean;
-  createdAt: string; // pre-formatted relative time
+  /** Raw timestamp — CommunityChannelFeed needs the real Date for grouping
+   * consecutive posts and placing day dividers, so formatting (relative
+   * time, clock time, whichever a given row shows) happens there, not
+   * server-side, unlike most other `createdAt` strings in this app. */
+  createdAt: string;
   authorName: string;
   authorUsername: string | undefined;
   authorAvatarUrl: string | undefined;
@@ -72,7 +77,7 @@ function PostClipCard({ clip, onOpen }: { clip: CommunityPostClipData; onOpen?: 
     <Link
       href={`/clips/${clip.slug}`}
       onClick={handleClick}
-      className="group mt-1.5 flex items-center gap-3 border border-line bg-raised p-2"
+      className="group/clip mt-1 flex items-center gap-3 border border-line bg-raised p-2"
     >
       <div className="relative w-20 shrink-0">
         {clip.thumbnailUrl ? (
@@ -89,26 +94,45 @@ function PostClipCard({ clip, onOpen }: { clip: CommunityPostClipData; onOpen?: 
           {formatDuration(clip.durationSec)}
         </span>
       </div>
-      <p className="min-w-0 flex-1 text-[0.875rem] leading-snug group-hover:text-signal">{clip.title}</p>
+      <p className="min-w-0 flex-1 text-[0.875rem] leading-snug group-hover/clip:text-signal">{clip.title}</p>
     </Link>
   );
 }
 
+const AVATAR_SIZE = 34;
+
 /**
- * One post row. Owns its own "hidden" flag so it can disappear the instant
- * its own delete succeeds, rather than copying the whole post list into
- * client state — a list copy would need re-syncing on every channel switch
- * or new post from someone else, which a plain `useState(initialProp)`
- * doesn't do on its own. A single per-post boolean has no such staleness
- * problem: it starts false, and the only way it flips is this row's own
- * delete succeeding. deleteCommunityPostAction re-checks authorship or
- * moderator standing from the DB regardless of `canDelete`.
+ * One post row, Discord-style: a flat line (no bubble, no border) with the
+ * author's avatar on the left, name + timestamp on one line, body beneath.
+ * `compact` is what CommunityChannelFeed sets for every post after the
+ * first in a same-author run — it skips the avatar/name/timestamp entirely
+ * (just a blank gutter the same width as the avatar, so the body still
+ * lines up under the name above it), same grouping Discord itself does.
+ *
+ * Owns its own "hidden" flag so it can disappear the instant its own
+ * delete succeeds, rather than copying the whole post list into client
+ * state — a list copy would need re-syncing on every channel switch or new
+ * post from someone else, which a plain `useState(initialProp)` doesn't do
+ * on its own. A single per-post boolean has no such staleness problem: it
+ * starts false, and the only way it flips is this row's own delete
+ * succeeding. deleteCommunityPostAction re-checks authorship or moderator
+ * standing from the DB regardless of `canDelete`.
  */
 export function CommunityPostRow({
   post,
+  compact,
+  timeLabel,
   viewerId,
 }: {
   post: CommunityPostRowData;
+  /** True for every post after the first in a consecutive same-author run
+   * — see CommunityChannelFeed's grouping. */
+  compact: boolean;
+  /** Pre-formatted display time for the header line (hidden when
+   * `compact`) — computed by CommunityChannelFeed from post.createdAt so
+   * every row in the list shares one `now` reference instead of each row
+   * computing its own. */
+  timeLabel: string;
   /** The signed-in viewer's own id, for opening this post's clip (if it
    * has one) in place instead of navigating to /clips/[slug] — see
    * PostClipCard and ClipViewerModal. Undefined for a signed-out viewer,
@@ -141,70 +165,75 @@ export function CommunityPostRow({
     });
   };
 
-  const avatar = (
-    <Avatar name={post.authorName} seed={post.authorUsername} size={32} avatarUrl={post.authorAvatarUrl} />
-  );
-
   return (
-    <li className="flex gap-2.5 border border-line bg-surface p-3">
-      {post.authorUsername ? (
-        <Link href={`/u/${post.authorUsername}`} aria-label={post.authorName}>
-          {avatar}
-        </Link>
-      ) : (
-        avatar
-      )}
-      <div className="min-w-0 flex-1">
-        <p className="flex items-baseline gap-2">
-          {post.authorUsername ? (
-            <Link href={`/u/${post.authorUsername}`} className="text-[0.875rem] hover:text-signal">
-              {post.authorName}
+    <div className={`group relative flex gap-3 px-2.5 hover:bg-raised ${compact ? "py-px" : "pt-2.5 pb-0.5"}`}>
+      <div className="shrink-0" style={{ width: AVATAR_SIZE }}>
+        {!compact &&
+          (post.authorUsername ? (
+            <Link href={`/u/${post.authorUsername}`} aria-label={post.authorName}>
+              <Avatar name={post.authorName} seed={post.authorUsername} size={AVATAR_SIZE} avatarUrl={post.authorAvatarUrl} />
             </Link>
           ) : (
-            <span className="text-[0.875rem]">{post.authorName}</span>
-          )}
-          <span className="tabular text-[0.625rem] text-faint">{post.createdAt}</span>
-          {post.pinned && <Pill tone="signal">pinned</Pill>}
-          {(post.canDelete || post.canReport) && (
-            <span className="ml-auto flex items-center gap-1">
-              {post.canReport && (
-                <button
-                  type="button"
-                  className="btn btn-ghost px-1.5 text-faint hover:text-signal"
-                  onClick={() => setReportOpen(true)}
-                  aria-label="Report post"
-                >
-                  <Flag size={12} />
-                </button>
-              )}
-              {post.canDelete && (
-                <button
-                  type="button"
-                  className="btn btn-ghost px-1.5 text-faint hover:text-live"
-                  onClick={handleDelete}
-                  disabled={isPending}
-                  aria-label="Delete post"
-                >
-                  <X size={12} />
-                </button>
-              )}
-            </span>
-          )}
-        </p>
+            <Avatar name={post.authorName} seed={post.authorUsername} size={AVATAR_SIZE} avatarUrl={post.authorAvatarUrl} />
+          ))}
+      </div>
+      <div className="min-w-0 flex-1">
+        {!compact && (
+          <p className="flex items-baseline gap-2">
+            {post.authorUsername ? (
+              <Link href={`/u/${post.authorUsername}`} className="text-[0.875rem] font-medium hover:text-signal">
+                {post.authorName}
+              </Link>
+            ) : (
+              <span className="text-[0.875rem] font-medium">{post.authorName}</span>
+            )}
+            <span className="tabular text-[0.6875rem] text-faint">{timeLabel}</span>
+            {post.pinned && <Pill tone="signal">pinned</Pill>}
+          </p>
+        )}
         {post.clip ? (
           <PostClipCard clip={post.clip} onOpen={viewerId ? () => setViewerOpen(true) : undefined} />
         ) : post.clip === null ? (
-          <p className="mt-1.5 border border-dashed border-line px-2.5 py-1.5 text-[0.8125rem] text-faint">
+          <p className="mt-0.5 border border-dashed border-line px-2.5 py-1.5 text-[0.8125rem] text-faint">
             This clip has been removed.
           </p>
         ) : null}
-        {post.body && <p className="mt-1 text-[0.875rem] leading-relaxed text-muted">{post.body}</p>}
+        {post.body && <p className="whitespace-pre-wrap break-words text-[0.875rem] leading-relaxed text-text">{post.body}</p>}
         {error && (
           <p role="alert" className="mt-1 text-[0.6875rem] text-live">
             {error}
           </p>
         )}
       </div>
+
+      {(post.canDelete || post.canReport) && (
+        <span
+          className="glass absolute right-2 top-1 flex items-center gap-1 px-1 py-0.5 opacity-0 transition-opacity
+            duration-150 group-hover:opacity-100 group-focus-within:opacity-100"
+        >
+          {post.canReport && (
+            <button
+              type="button"
+              className="btn btn-ghost px-1.5 text-faint hover:text-signal"
+              onClick={() => setReportOpen(true)}
+              aria-label="Report post"
+            >
+              <Flag size={12} />
+            </button>
+          )}
+          {post.canDelete && (
+            <button
+              type="button"
+              className="btn btn-ghost px-1.5 text-faint hover:text-live"
+              onClick={handleDelete}
+              disabled={isPending}
+              aria-label="Delete post"
+            >
+              <X size={12} />
+            </button>
+          )}
+        </span>
+      )}
 
       {reportOpen && (
         <ReportDialog target="COMMUNITY_POST" targetId={post.id} label="post" onClose={() => setReportOpen(false)} />
@@ -213,6 +242,6 @@ export function CommunityPostRow({
       {viewerOpen && post.clip && viewerId && (
         <ClipViewerModal clipId={post.clip.id} onClose={() => setViewerOpen(false)} />
       )}
-    </li>
+    </div>
   );
 }

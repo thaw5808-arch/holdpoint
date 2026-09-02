@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { GoLiveToaster } from "@/components/go-live-toaster";
 import { MobileNav } from "@/components/shell/mobile-nav";
 import { Sidebar } from "@/components/shell/sidebar";
 import { Topbar } from "@/components/shell/topbar";
@@ -45,6 +46,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         <main className="min-w-0 flex-1 pb-[var(--mobile-nav-clearance)] lg:pb-0">{children}</main>
         <MobileNav />
       </div>
+      <GoLiveToaster />
     </div>
   );
 }

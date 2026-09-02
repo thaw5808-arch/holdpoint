@@ -34,14 +34,14 @@ export function ClipsChannelComposer({
 
   if (!canPostHere) {
     return (
-      <p className="mb-3 border border-dashed border-line px-3 py-2.5 text-sm text-muted">
+      <p className="border-t border-dashed border-line px-3 py-2.5 text-sm text-muted">
         Only moderators can post in #{channelName}.
       </p>
     );
   }
 
   return (
-    <div className="mb-3 border border-line bg-surface p-2.5">
+    <div className="border-t border-line bg-surface p-2.5">
       <div className="mb-2.5 flex gap-1 border-b border-line pb-2.5">
         <button
           type="button"

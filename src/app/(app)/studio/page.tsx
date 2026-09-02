@@ -1,8 +1,10 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { Copy, Radio } from "lucide-react";
+import { Copy } from "lucide-react";
 import { Thumb } from "@/components/cards";
 import { Spark } from "@/components/spark";
+import { StreamDetailsForm } from "@/components/stream-details-form";
+import { StudioLiveControls } from "@/components/studio-live-controls";
 import { EmptyState, LiveTag, Pill, SectionHeader, StatTile } from "@/components/ui";
 import { compactNumber, duration } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
@@ -34,9 +36,10 @@ export default async function StudioPage() {
     );
   }
 
-  const [subs, followers] = await Promise.all([
+  const [subs, followers, games] = await Promise.all([
     prisma.subscription.count({ where: { creatorId: user.id, cancelled: false } }),
     prisma.follow.count({ where: { followedId: user.id } }),
+    prisma.game.findMany({ orderBy: { name: "asc" }, select: { slug: true, name: true } }),
   ]);
 
   const sessions = [...stream.sessions].reverse();
@@ -57,9 +60,7 @@ export default async function StudioPage() {
           <Link href="/studio/highlights" className="btn">
             Highlight studio
           </Link>
-          <button className="btn btn-primary">
-            <Radio size={14} /> {stream.isLive ? "End stream" : "Go live"}
-          </button>
+          <StudioLiveControls initialLive={stream.isLive} />
         </div>
       </div>
 
@@ -72,26 +73,12 @@ export default async function StudioPage() {
             </div>
           </div>
           <div className="mt-3 space-y-3 border border-line bg-surface p-3">
-            <div>
-              <label htmlFor="title" className="eyebrow mb-1.5 block">
-                Stream title
-              </label>
-              <input id="title" className="input" defaultValue={stream.title} />
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div>
-                <label htmlFor="category" className="eyebrow mb-1.5 block">
-                  Category
-                </label>
-                <input id="category" className="input" defaultValue={stream.game?.name ?? ""} />
-              </div>
-              <div>
-                <label htmlFor="tags" className="eyebrow mb-1.5 block">
-                  Tags
-                </label>
-                <input id="tags" className="input" defaultValue={stream.tags.join(", ")} />
-              </div>
-            </div>
+            <StreamDetailsForm
+              initialTitle={stream.title}
+              initialGameSlug={stream.game?.slug ?? ""}
+              initialTags={stream.tags.join(", ")}
+              games={games}
+            />
             <div>
               <p className="eyebrow mb-1.5">Ingest</p>
               <div className="flex items-center gap-2">

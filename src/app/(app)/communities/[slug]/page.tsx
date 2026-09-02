@@ -1,10 +1,10 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Avatar } from "@/components/avatar";
+import { CommunityChannelFeed } from "@/components/community-channel-feed";
 import { ClipsChannelComposer } from "@/components/community-clip-composer";
 import { CommunityChannelNav } from "@/components/community-channel-nav";
 import { CommunityPostComposer, JoinToPostPrompt } from "@/components/community-post-composer";
-import { CommunityPostRow } from "@/components/community-post-row";
 import { Emblem } from "@/components/emblem";
 import { JoinCommunityButton } from "@/components/join-community-button";
 import { Pill, SectionHeader } from "@/components/ui";
@@ -12,7 +12,7 @@ import { VoiceChannelView } from "@/components/voice-channel-view";
 import { avatarSrc } from "@/lib/avatar-url";
 import { CHANNEL_KIND_ICON } from "@/lib/channel-kind-icon";
 import { clipPosterSrc } from "@/lib/clip-video-url";
-import { compactNumber, relativeTime } from "@/lib/format";
+import { compactNumber } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/session";
 
@@ -60,14 +60,21 @@ export default async function CommunityPage({
   // no reason to query CommunityPost for one. `clip` is included
   // regardless of kind (cheap: it's null on every row outside a CLIPS
   // channel) rather than branching the query itself on isClipsChannel.
+  //
+  // Fetched newest-first so `take` grabs the most recent 20 rather than
+  // the oldest 20, then reversed for display — the channel view reads
+  // chat-style, oldest at the top and newest at the bottom right above the
+  // composer (see CommunityChannelFeed), the opposite of the query order.
   const posts =
     active && !isVoiceChannel
-      ? await prisma.communityPost.findMany({
-          where: { channelId: active.id, deletedAt: null },
-          orderBy: { createdAt: "desc" },
-          take: 20,
-          include: { clip: { select: { id: true, slug: true, title: true, durationSec: true, thumbnailUrl: true } } },
-        })
+      ? (
+          await prisma.communityPost.findMany({
+            where: { channelId: active.id, deletedAt: null },
+            orderBy: { createdAt: "desc" },
+            take: 20,
+            include: { clip: { select: { id: true, slug: true, title: true, durationSec: true, thumbnailUrl: true } } },
+          })
+        ).reverse()
       : [];
   const authors = await prisma.user.findMany({
     where: { id: { in: posts.map((post) => post.authorId) } },
@@ -130,73 +137,69 @@ export default async function CommunityPage({
           {active && isVoiceChannel && <VoiceChannelView channelName={active.name} />}
 
           {active && !isVoiceChannel && (
-            <>
-              {user ? (
-                membership ? (
-                  isClipsChannel ? (
-                    <ClipsChannelComposer
-                      key={active.id}
-                      channelId={active.id}
-                      channelName={active.name}
-                      canPostHere={canPostHere}
-                    />
-                  ) : (
-                    <CommunityPostComposer
-                      key={active.id}
-                      channelId={active.id}
-                      channelName={active.name}
-                      canPostHere={canPostHere}
-                    />
-                  )
-                ) : (
-                  <JoinToPostPrompt communityId={community.id} />
-                )
-              ) : (
-                <p className="mb-3 border border-dashed border-line px-3 py-2.5 text-sm text-muted">
-                  <Link href="/login" className="text-signal hover:underline">
-                    Log in
-                  </Link>{" "}
-                  to post in #{active.name}.
-                </p>
-              )}
-
-              <ul className="space-y-3">
-                {posts.map((post) => {
+            <div className="sticky top-[var(--header-h)] flex h-[calc(100dvh_-_var(--header-h)_-_var(--mobile-nav-clearance))] min-h-0 flex-col border border-line bg-surface lg:h-[calc(100dvh_-_var(--header-h))]">
+              <CommunityChannelFeed
+                key={active.id}
+                viewerId={user?.id}
+                emptyMessage={
+                  isClipsChannel
+                    ? `No clips shared in #${active.name} yet. Be the first.`
+                    : `Nothing posted in #${active.name} yet. Say the first thing.`
+                }
+                posts={posts.map((post) => {
                   const author = authorById.get(post.authorId);
-                  return (
-                    <CommunityPostRow
-                      key={post.id}
-                      viewerId={user?.id}
-                      post={{
-                        id: post.id,
-                        body: post.body,
-                        // undefined outside a CLIPS channel (no card at
-                        // all); null when this post's clip has since been
-                        // deleted (onDelete: SetNull — see schema.prisma)
-                        // so the row renders a "removed" stub instead.
-                        clip: isClipsChannel
-                          ? post.clip && { ...post.clip, thumbnailUrl: clipPosterSrc(post.clip.thumbnailUrl) }
-                          : undefined,
-                        pinned: post.pinned,
-                        createdAt: relativeTime(post.createdAt),
-                        authorName: author?.displayName ?? "Member",
-                        authorUsername: author?.username,
-                        authorAvatarUrl: avatarSrc(author?.profile?.avatarUrl),
-                        canDelete: Boolean(user && (post.authorId === user.id || isModerator)),
-                        canReport: Boolean(user && post.authorId !== user.id),
-                      }}
-                    />
-                  );
+                  return {
+                    id: post.id,
+                    authorId: post.authorId,
+                    body: post.body,
+                    // undefined outside a CLIPS channel (no card at all);
+                    // null when this post's clip has since been deleted
+                    // (onDelete: SetNull — see schema.prisma) so the row
+                    // renders a "removed" stub instead.
+                    clip: isClipsChannel
+                      ? post.clip && { ...post.clip, thumbnailUrl: clipPosterSrc(post.clip.thumbnailUrl) }
+                      : undefined,
+                    pinned: post.pinned,
+                    createdAt: post.createdAt.toISOString(),
+                    authorName: author?.displayName ?? "Member",
+                    authorUsername: author?.username,
+                    authorAvatarUrl: avatarSrc(author?.profile?.avatarUrl),
+                    canDelete: Boolean(user && (post.authorId === user.id || isModerator)),
+                    canReport: Boolean(user && post.authorId !== user.id),
+                  };
                 })}
-                {posts.length === 0 && (
-                  <li className="border border-dashed border-line p-6 text-center text-sm text-muted">
-                    {isClipsChannel
-                      ? `No clips shared in #${active?.name} yet. Be the first.`
-                      : `Nothing posted in #${active?.name} yet. Say the first thing.`}
-                  </li>
-                )}
-              </ul>
-            </>
+                composer={
+                  user ? (
+                    membership ? (
+                      isClipsChannel ? (
+                        <ClipsChannelComposer
+                          key={active.id}
+                          channelId={active.id}
+                          channelName={active.name}
+                          canPostHere={canPostHere}
+                        />
+                      ) : (
+                        <CommunityPostComposer
+                          key={active.id}
+                          channelId={active.id}
+                          channelName={active.name}
+                          canPostHere={canPostHere}
+                        />
+                      )
+                    ) : (
+                      <JoinToPostPrompt communityId={community.id} />
+                    )
+                  ) : (
+                    <p className="border-t border-dashed border-line px-3 py-2.5 text-sm text-muted">
+                      <Link href="/login" className="text-signal hover:underline">
+                        Log in
+                      </Link>{" "}
+                      to post in #{active.name}.
+                    </p>
+                  )
+                }
+              />
+            </div>
           )}
         </section>
 
