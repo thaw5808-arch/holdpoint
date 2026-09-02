@@ -88,7 +88,11 @@ export function Sidebar({
                 <Link
                   href={href}
                   aria-current={active ? "page" : undefined}
-                  className={`group flex items-center gap-3 px-2.5 py-2 text-sm transition-colors ${
+                  // nav-label: Rajdhani — sidebar nav only, see globals.css.
+                  // text-[15px] is text-sm (14px) + ~1pt: Rajdhani reads
+                  // small next to Inter at a matched size, and .nav-label's
+                  // 600 weight alone doesn't make up the gap.
+                  className={`group flex items-center gap-3 px-2.5 py-2 nav-label text-[15px] transition-colors ${
                     active ? "bg-surface text-text" : "text-muted hover:bg-surface hover:text-text"
                   }`}
                 >

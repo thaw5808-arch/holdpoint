@@ -36,6 +36,10 @@
   --font-display: var(--font-chakra), "Chakra Petch", system-ui, sans-serif;
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-jet), ui-monospace, monospace;
+  /* Sidebar nav items and the global search input only — see .nav-label
+     below. Not a replacement for --font-sans: body text, headings and
+     numbers all keep their existing fonts. */
+  --font-nav: var(--font-rajdhani), "Rajdhani", system-ui, sans-serif;
 
   --radius-none: 0px;
 
@@ -113,6 +117,25 @@ body {
 .tabular {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
+}
+
+/* Sidebar nav items, the mobile nav's tab bar, and the topbar search
+   input — nowhere else (see --font-nav above). Only sets family/weight;
+   size is bumped per call site since the three surfaces this is used on
+   run at very different scales (a 236px sidebar row vs. an 11px mobile
+   tab label). Rajdhani reads noticeably smaller and lighter than Inter
+   at a matched pixel size and weight, hence the 600 rather than
+   whatever surrounding body text is using.
+   Named .nav-label, not .font-nav — any --font-* @theme key gets its own
+   Tailwind utility auto-generated for free (`font-nav` in this case,
+   mapping to font-family only, no weight), same as --color-canvas's own
+   comment above describes for `text-base`. `.font-nav` would collide
+   with that generated utility; being unlayered it'd still win here, but
+   silently, so this stays out of its way with a real name instead —
+   same reason .display/.eyebrow/.tabular aren't .font-display etc. */
+.nav-label {
+  font-family: var(--font-nav);
+  font-weight: 600;
 }
 
 /* ---------------------------------------------------------- signature
@@ -394,6 +417,16 @@ textarea:focus-visible {
    stays unlayered too, so it actually wins. */
 .input-icon-left {
   padding-left: 2.25rem;
+}
+
+/* Bumps the topbar search input's font-size for .nav-label (see above) —
+   `.input`'s own font-size is unlayered too, so a Tailwind text-size
+   utility can't win here regardless of source order; this can, and does,
+   being unlayered itself and declared after `.input` (same tie-break
+   .input-icon-left's own comment describes). ~1.5pt over .input's 0.9rem,
+   matching Rajdhani's smaller-at-the-same-size optical size. */
+.input-nav {
+  font-size: 1rem;
 }
 
 /* ---------------------------------------------------------- skeletons */

@@ -113,7 +113,11 @@ export function Topbar({
         />
         <input
           id="global-search"
-          className="input input-icon-left"
+          // nav-label + input-nav: Rajdhani, sized up from .input's own
+          // 0.9rem — see both classes' comments in globals.css for why
+          // this needs the dedicated input-nav override rather than a
+          // Tailwind text-size utility.
+          className="input input-icon-left nav-label input-nav"
           placeholder="Search creators, games, teams, tournaments"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
@@ -174,13 +178,19 @@ export function Topbar({
                   Nothing yet. Follow a creator and you&rsquo;ll hear when they go live.
                 </p>
               ) : (
-                <ul className="max-h-[60vh] overflow-y-auto">
+                <ul className="max-h-[60vh] space-y-0.5 overflow-y-auto">
                   {items.slice(0, 6).map((item) => (
                     <li key={item.id}>
+                      {/* Same bare-row treatment as /messages and the full
+                          /notifications page — no border, background only
+                          on hover/press, rounded only there. Kept at this
+                          panel's own compact padding rather than that
+                          page's roomier one; this is a small popover, not
+                          a primary list surface. */}
                       <Link
                         href={item.href}
                         onClick={() => setOpen(null)}
-                        className="flex gap-2.5 px-3 py-2.5 hover:bg-surface"
+                        className="flex gap-2.5 rounded-lg px-3 py-2.5 transition-colors duration-150 hover:bg-raised active:bg-line"
                       >
                         <span
                           className={`mt-1.5 h-1.5 w-1.5 shrink-0 ${

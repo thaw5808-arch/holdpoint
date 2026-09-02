@@ -933,13 +933,24 @@ model UserAchievement {
 
 // ---------------------------------------------------------------- messaging
 
+// A conversation's accent colour, set from the header menu's fixed swatch
+// set (see ThreadMenu) and shared by every member — unlike mute/hide below,
+// this isn't a per-viewer preference, it's what the sent-message bubble
+// looks like for anyone reading the thread.
+enum ConversationTheme {
+  SIGNAL
+  GOLD
+  ICE
+}
+
 model Conversation {
-  id        String   @id @default(cuid())
-  title     String?
-  isGroup   Boolean  @default(false)
-  teamId    String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id         String            @id @default(cuid())
+  title      String?
+  isGroup    Boolean           @default(false)
+  teamId     String?
+  themeColor ConversationTheme @default(SIGNAL)
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
 
   members  ConversationMember[]
   messages Message[]
@@ -950,6 +961,21 @@ model ConversationMember {
   conversationId String
   userId         String
   lastReadAt     DateTime?
+  // Set = this member muted the conversation. Purely a per-member
+  // notification preference, the same shape as lastReadAt itself: messages
+  // still land and post normally (the other participant sees nothing
+  // different), this only tells unreadMessageCount (lib/queries.ts) to skip
+  // the conversation when it totals up the topbar badge.
+  mutedAt DateTime?
+  // Set = this member "deleted" the conversation from their own inbox
+  // (messages/page.tsx excludes it). Not a real delete: the conversation,
+  // its messages, and the other participant's membership are all untouched
+  // — they keep seeing the full history exactly as before. Cleared
+  // automatically the moment this member is sent a new message
+  // (sendMessageAction) or opens the thread again (ConversationPage), so
+  // this behaves like "hide from my list, until there's a reason not to",
+  // never a way to actually lose messages either side already has.
+  hiddenAt DateTime?
 
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -959,6 +985,8 @@ model ConversationMember {
 
 enum MessageKind {
   TEXT
+  IMAGE
+  VIDEO
   CLIP
   STREAM
   TEAM_INVITE

@@ -121,8 +121,11 @@ export async function searchSuggestions() {
 }
 
 export async function unreadMessageCount(userId: string) {
+  // Muted conversations (ConversationMember.mutedAt) are excluded outright
+  // rather than counted-then-subtracted — their messages still land and
+  // post normally, they just never contribute to this badge.
   const memberships = await prisma.conversationMember.findMany({
-    where: { userId },
+    where: { userId, mutedAt: null },
     select: { conversationId: true, lastReadAt: true },
   });
   if (memberships.length === 0) return 0;

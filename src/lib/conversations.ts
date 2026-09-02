@@ -59,3 +59,20 @@ export async function usersCanMessage(userIdA: string, userIdB: string): Promise
   });
   return Boolean(follow);
 }
+
+/**
+ * Un-hides a conversation (ConversationMember.hiddenAt) for everyone
+ * except `senderId` — called whenever a new message posts, text or
+ * attachment, so a member who'd "deleted" the conversation from their own
+ * inbox (ThreadMenu's Delete chat) doesn't stay cut off from messages
+ * arriving after that. See hiddenAt's own comment in schema.prisma for
+ * the full "not a real delete" reasoning. `hiddenAt: { not: null }` keeps
+ * this a no-op write for members who never hid it, not just a
+ * correctness no-op.
+ */
+export async function unhideConversationForRecipients(conversationId: string, senderId: string) {
+  await prisma.conversationMember.updateMany({
+    where: { conversationId, userId: { not: senderId }, hiddenAt: { not: null } },
+    data: { hiddenAt: null },
+  });
+}

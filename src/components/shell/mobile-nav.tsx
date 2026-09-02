@@ -58,7 +58,12 @@ export function MobileNav() {
           const content = (
             <>
               <Icon size={19} strokeWidth={1.75} className={active ? "text-signal" : ""} />
-              <span className={`text-[0.625rem] ${active ? "text-text" : "text-faint"}`}>{label}</span>
+              {/* nav-label: same Rajdhani treatment as the sidebar (see
+                  globals.css) — 0.6875rem is 0.625rem + ~1pt, kept small
+                  since five labels share this bar's full width. */}
+              <span className={`nav-label text-[0.6875rem] ${active ? "text-text" : "text-faint"}`}>
+                {label}
+              </span>
             </>
           );
           return href ? (

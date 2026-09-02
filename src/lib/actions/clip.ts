@@ -18,6 +18,7 @@ import { probeVideoDurationSec } from "@/lib/video-probe";
 import { prisma } from "@/lib/prisma";
 import { getCurrentSessionId, getCurrentUser } from "@/lib/session";
 import { storage } from "@/lib/storage";
+import { readObjectPrefix } from "@/lib/storage-verify";
 
 // How many leading bytes of an uploaded object get read back for the
 // post-upload sniff. Every signature sniffVideoType checks for lives
@@ -41,37 +42,6 @@ async function uniqueClipSlug(base: string) {
     slug = `${base}-${suffix}`;
   }
   return slug;
-}
-
-/**
- * Reads back the first `byteCount` bytes of an object that's supposedly
- * already in the bucket, via a signed GET + Range request — the same
- * "sign a URL, fetch it, forward what R2 says" shape as the clip-serving
- * route. Returns null if the object doesn't exist or the request
- * otherwise fails, which callers treat as "the upload never landed."
- *
- * Also reports the object's real total size, off the `Content-Range`
- * header a satisfied Range request comes back with (`bytes 0-63/<total>`)
- * — the size cap's own server-side re-check reads this rather than
- * trusting the `fileSize` the client claimed back when it requested the
- * upload URL, same "trust the bytes, not the request" stance as the
- * sniff below. Null if that header is missing for some reason (an
- * unexpected 200 instead of 206, say) — callers skip the re-check rather
- * than fail an upload over a header they can't read.
- */
-async function readObjectPrefix(
-  key: string,
-  byteCount: number,
-): Promise<{ bytes: Buffer; totalSize: number | null } | null> {
-  const url = await storage.getUrl(key);
-  const response = await fetch(url, { headers: { range: `bytes=0-${byteCount - 1}` } });
-  if (!response.ok) return null;
-  const contentRange = response.headers.get("content-range"); // "bytes 0-63/1234567"
-  const totalSize = contentRange ? Number(contentRange.split("/")[1]) : NaN;
-  return {
-    bytes: Buffer.from(await response.arrayBuffer()),
-    totalSize: Number.isFinite(totalSize) ? totalSize : null,
-  };
 }
 
 const UPLOADABLE_VIDEO_TYPES = ["video/mp4", "video/quicktime", "video/webm", "video/x-msvideo"] as const;

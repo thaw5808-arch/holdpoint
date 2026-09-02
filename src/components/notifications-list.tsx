@@ -52,15 +52,22 @@ export function NotificationsList({ notifications }: { notifications: Notificati
   }
 
   return (
-    <ul className="divide-y divide-line border border-line">
+    // Same bare-row treatment as /messages (see that page's own comment):
+    // rounded, not chamfered, and only the hover/active highlight itself
+    // is rounded — no border or background at rest, just a small gap
+    // between rows instead of one edge-to-edge divided block.
+    <ul className="space-y-1">
       {items.map((notification) => (
         <li key={notification.id}>
-          <Link href={notification.href} className="flex gap-3 bg-surface px-3 py-3 hover:bg-raised">
+          <Link
+            href={notification.href}
+            className="flex gap-3 rounded-lg p-4 transition-colors duration-150 hover:bg-raised active:bg-line"
+          >
             <span
               className={`mt-2 h-1.5 w-1.5 shrink-0 ${notification.unread ? "bg-signal" : "bg-transparent"}`}
             />
             <span className="min-w-0">
-              <span className="block text-sm">{notification.title}</span>
+              <span className="block text-[15px]">{notification.title}</span>
               <span className="block text-[0.8125rem] text-muted">{notification.body}</span>
               <span className="tabular block pt-0.5 text-[0.625rem] text-faint">{notification.at}</span>
             </span>

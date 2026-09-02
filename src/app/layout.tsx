@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Chakra_Petch, Inter, JetBrains_Mono } from "next/font/google";
+import { Chakra_Petch, Inter, JetBrains_Mono, Rajdhani } from "next/font/google";
 import "./globals.css";
 
 const chakra = Chakra_Petch({
@@ -9,6 +9,10 @@ const chakra = Chakra_Petch({
 });
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 const jet = JetBrains_Mono({ subsets: ["latin"], weight: ["400", "500"], variable: "--font-jet" });
+// Sidebar nav + the topbar search input only (see .font-nav in
+// globals.css) — not a general body/heading font, so it stays its own
+// variable rather than replacing --font-sans.
+const rajdhani = Rajdhani({ subsets: ["latin"], weight: ["600"], variable: "--font-rajdhani" });
 
 export const metadata: Metadata = {
   title: "Holdpoint — hold your ground",
@@ -22,7 +26,7 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${chakra.variable} ${inter.variable} ${jet.variable}`}>
+    <html lang="en" className={`${chakra.variable} ${inter.variable} ${jet.variable} ${rajdhani.variable}`}>
       <body>{children}</body>
     </html>
   );
