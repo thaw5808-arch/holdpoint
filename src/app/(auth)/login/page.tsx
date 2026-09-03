@@ -66,6 +66,10 @@ export default function LoginPage() {
         </button>
       </form>
 
+      <p className="mt-4 text-xs text-muted">
+        Just looking around? Try the demo: demo@holdpoint.gg / holdpointdemo
+      </p>
+
       <p className="mt-6 text-sm text-muted">
         No account yet?{" "}
         <Link href="/register" className="text-signal hover:underline">
