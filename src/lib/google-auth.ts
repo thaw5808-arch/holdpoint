@@ -1,7 +1,7 @@
 import { randomBytes } from "crypto";
 import { cookies } from "next/headers";
 import { createRemoteJWKSet, jwtVerify } from "jose";
-import { env } from "./env";
+import { env, getAppUrl } from "./env";
 import { prisma } from "./prisma";
 
 /**
@@ -11,10 +11,21 @@ import { prisma } from "./prisma";
  * module hands back a User row, it's indistinguishable from a password
  * user for the rest of the app.
  *
- * This redirect URI is registered with Google as-is; it isn't derived from
- * the incoming request, since that value has to match the console exactly.
+ * This redirect URI must exactly match one of the "Authorized redirect
+ * URIs" registered on the Google Cloud Console client, both when we send
+ * the user to accounts.google.com AND when we exchange the code for a
+ * token below — Google rejects the exchange otherwise. It's built from
+ * APP_URL (getAppUrl(), defaulting to localhost for dev) rather than the
+ * incoming request's Host header on purpose: Host is client-supplied and
+ * an OAuth redirect_uri is a security-relevant value, so it should come
+ * from server config we control, not request input. It also wouldn't
+ * solve anything anyway — Google still requires an exact pre-registered
+ * match per environment, and Vercel preview URLs are unpredictable, so
+ * there's no way around registering fixed URIs per environment. Set
+ * APP_URL to https://holdpoint-eight.vercel.app in Vercel's Production
+ * env vars; leave it unset locally.
  */
-const GOOGLE_REDIRECT_URI = "http://localhost:3000/api/auth/google/callback";
+const GOOGLE_REDIRECT_URI = `${getAppUrl()}/api/auth/google/callback`;
 
 const GOOGLE_AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";

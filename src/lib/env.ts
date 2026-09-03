@@ -50,3 +50,18 @@ export const env: Record<RequiredEnvVar, string> = new Proxy(
   {} as Record<RequiredEnvVar, string>,
   { get: (_target, key) => requireEnv(key as RequiredEnvVar) },
 );
+
+/**
+ * The app's own public origin — used to build absolute URLs (currently just
+ * the Google OAuth redirect_uri) that must be fixed, known values rather
+ * than anything derived from a request's Host header. Deliberately NOT
+ * required: unset, it falls back to the local dev server so `next dev`
+ * keeps working with zero setup. On Vercel, set APP_URL to the production
+ * host (e.g. https://holdpoint-eight.vercel.app) in the Production
+ * environment's env vars — see the comment on GOOGLE_REDIRECT_URI in
+ * google-auth.ts for why this has to be a fixed var instead of derived
+ * from the request.
+ */
+export function getAppUrl(): string {
+  return (process.env.APP_URL ?? "http://localhost:3000").replace(/\/+$/, "");
+}
